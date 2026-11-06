@@ -5,7 +5,7 @@
   "Description": "Perfect and quick automatic matching animation syncing\n\nHow it works:\n1. Checks for players near each other within your selected distance.\n2. Checks that their animations have the same total frames, duration and playback speed.\n3. If they are on different frames, syncs their animations together.\n\nWith this enabled, you should rarely need to use animsync manually.",
   "Punchline": "Perfect and quick automatic matching animation syncing",
   "InternalName": "AnimSync",
-  "AssemblyVersion": "1.3.41.0",
+  "AssemblyVersion": "1.3.42.0",
   "RepoUrl": "https://github.com/CandyAppleUwU/ffxiv-animation-syncer-plus",
   "IconUrl": "https://raw.githubusercontent.com/CandyAppleUwU/ffxiv-animation-syncer-plus/main/images/icon.png",
   "ApplicableVersion": "any",
@@ -23,10 +23,9 @@
   "DalamudApiLevel": 15,
   "IsHide": false,
   "IsTestingExclusive": false,
-  "LastUpdated": 1793955062,
-  "DownloadLinkInstall": "https://github.com/CandyAppleUwU/ffxiv-animation-syncer-plus/releases/download/v1.3.41.0/AnimationSyncerPlus.zip",
-  "DownloadLinkTesting": "https://github.com/CandyAppleUwU/ffxiv-animation-syncer-plus/releases/download/v1.3.41.0/AnimationSyncerPlus.zip",
-  "DownloadLinkUpdate": "https://github.com/CandyAppleUwU/ffxiv-animation-syncer-plus/releases/download/v1.3.41.0/AnimationSyncerPlus.zip"
+  "LastUpdated": 1793960098,
+  "DownloadLinkInstall": "https://github.com/CandyAppleUwU/ffxiv-animation-syncer-plus/releases/download/v1.3.42.0/AnimationSyncerPlus.zip",
+  "DownloadLinkTesting": "https://github.com/CandyAppleUwU/ffxiv-animation-syncer-plus/releases/download/v1.3.42.0/AnimationSyncerPlus.zip",
+  "DownloadLinkUpdate": "https://github.com/CandyAppleUwU/ffxiv-animation-syncer-plus/releases/download/v1.3.42.0/AnimationSyncerPlus.zip"
 }
 ]
-
