@@ -22,3 +22,7 @@ during combat, duties, cutscenes, and loading.
 - Added Same time sync below Perfect Frame Sync, with a saved shared phrase and party/target chat buttons.
 - Manual matching party/tell messages also trigger; outgoing events wait 300 ms and incoming events run next update.
 - Restricts restarts to the tell pair or loaded party, preserves sound/DJ and cutscene rules, and limits repeated triggers.
+
+## 1.3.42.0
+- Restrict the cutscene/GPose pause to automatic group syncing, redraw recovery, and position alignment. Manual animation commands and buttons remain available.
+- Manual GPose commands select the visible GPose copies and GPose target; keep the settings window visible in cutscenes and GPose.

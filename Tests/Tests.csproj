@@ -6,6 +6,7 @@
     <Nullable>enable</Nullable>
   </PropertyGroup>
   <ItemGroup>
+    <Compile Include="../AnimSync/SyncScopeRules.cs" Link="SyncScopeRules.cs" />
     <Compile Include="../AnimSync/TimeSyncRules.cs" Link="TimeSyncRules.cs" />
     <Compile Include="../AnimSync/NearbyGroups.cs" Link="NearbyGroups.cs" />
     <Compile Include="../AnimSync/ClipFrames.cs" Link="ClipFrames.cs" />

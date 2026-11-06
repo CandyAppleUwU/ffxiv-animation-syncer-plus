@@ -69,6 +69,8 @@ public sealed partial class AnimSync : IDalamudPlugin {
 		positionAlignment = new PositionAlignment(Objects, Targets, Client, Conditions, Chat);
 		settingsWindow = new SettingsWindow(this);
 		windows.AddWindow(settingsWindow);
+		Interface.UiBuilder.DisableGposeUiHide = true;
+		Interface.UiBuilder.DisableCutsceneUiHide = true;
 		Interface.UiBuilder.Draw += windows.Draw;
 		Interface.UiBuilder.OpenConfigUi += OpenSettings;
 		Interface.UiBuilder.OpenMainUi += OpenSettings;
@@ -121,8 +123,15 @@ public sealed partial class AnimSync : IDalamudPlugin {
 		}
 	}
 	private void Save() { config.Normalize(); Interface.SavePluginConfig(config); }
-	private static bool IsPaused => Conditions[ConditionFlag.WatchingCutscene] ||
-		Conditions[ConditionFlag.WatchingCutscene78] || Conditions[ConditionFlag.OccupiedInCutSceneEvent];
+	private static bool IsAutomaticSyncPaused => Conditions[ConditionFlag.WatchingCutscene] ||
+		Conditions[ConditionFlag.WatchingCutscene78] || Conditions[ConditionFlag.OccupiedInCutSceneEvent] || Client.IsGPosing;
+	private static bool IsManualPlayer(IGameObject obj) => obj.ObjectKind == ObjectKind.Pc &&
+		SyncScopeRules.IncludesPlayer(obj.ObjectIndex, Client.IsGPosing);
+	private static IGameObject? ManualSelf() {
+		var self = Objects.LocalPlayer;
+		return !Client.IsGPosing || self == null ? self : Objects.FirstOrDefault(p => IsManualPlayer(p) &&
+			p.Name.TextValue == self.Name.TextValue);
+	}
 	private static string? PlayerSoundKey(IGameObject obj) => obj is IPlayerCharacter p
 		? SoundSyncPolicy.PlayerKey(p.Name.TextValue, p.HomeWorld.RowId) : null;
 	private bool CanSyncSound(IGameObject obj) => SoundSyncPolicy.CanSync(config.SyncSound,
@@ -143,7 +152,7 @@ public sealed partial class AnimSync : IDalamudPlugin {
 			case "near": nearYouRequested = true; break;
 			case "pos": case "align": positionRequested = true; break;
 			case "target":
-				if(Targets.Target is IPlayerCharacter target && target.ObjectIndex < 200)
+				if((Client.IsGPosing ? Targets.GPoseTarget : Targets.Target) is { } target && IsManualPlayer(target))
 					targetSyncRequest = (target.GameObjectId, target.Address);
 				else Chat.Print("[AnimSync] Select another player to sync with.");
 				break;
@@ -156,19 +165,9 @@ public sealed partial class AnimSync : IDalamudPlugin {
 		if(positionRequested) { positionRequested = false; positionAlignment.Request(); }
 		positionAlignment.Update();
 		var now = DateTime.UtcNow;
-		var paused = IsPaused;
+		var paused = IsAutomaticSyncPaused;
 		ProcessTimeSync(now);
 		ProcessRedrawRecovery(now, paused);
-		if(paused) {
-			if(restartRequested || bodyRequested || nearYouRequested || nearbyRequested || targetSyncRequest.HasValue)
-				Chat.Print("[AnimSync] Animation syncing is paused during cutscenes.");
-			restartRequested = bodyRequested = nearYouRequested = nearbyRequested = false;
-			targetSyncRequest = null;
-			samples.Clear();
-			detectedPlayers.Clear();
-			nextScan = default;
-			return;
-		}
 		if(targetSyncRequest is { } requested) {
 			targetSyncRequest = null;
 			SyncTarget(requested.Id, requested.Address, now);
@@ -176,7 +175,7 @@ public sealed partial class AnimSync : IDalamudPlugin {
 		}
 		if(restartRequested || bodyRequested || nearYouRequested) {
 			var nearOnly = nearYouRequested && !restartRequested && !bodyRequested;
-			var self = Objects.LocalPlayer;
+			var self = ManualSelf();
 			if(nearOnly && self == null) {
 				nearYouRequested = false;
 				Chat.Print("[AnimSync] No local player is loaded.");
@@ -185,7 +184,8 @@ public sealed partial class AnimSync : IDalamudPlugin {
 			var center = self?.Position ?? default;
 			foreach(var obj in Objects) {
 				if(obj.ObjectKind != ObjectKind.Pc && obj.ObjectKind != ObjectKind.BattleNpc) continue;
-				if(nearOnly && (obj.ObjectKind != ObjectKind.Pc || obj.ObjectIndex >= 200 ||
+				if(Client.IsGPosing && !SyncScopeRules.IncludesPlayer(obj.ObjectIndex, true)) continue;
+				if(nearOnly && (!IsManualPlayer(obj) ||
 					Vector3.DistanceSquared(center, obj.Position) > config.Distance * config.Distance)) continue;
 				if(nearOnly) {
 					var draw = ((Character*)obj.Address)->GameObject.DrawObject;
@@ -202,18 +202,26 @@ public sealed partial class AnimSync : IDalamudPlugin {
 			nextScan = now.AddSeconds(0.5);
 			return;
 		}
+		if(paused && !nearbyRequested) {
+			samples.Clear();
+			nextScan = default;
+			return;
+		}
 		if(now < nextScan && !nearbyRequested) return;
 		nextScan = now.AddSeconds(Math.Min(0.1, config.CooldownSeconds));
-		var shouldSync = config.Enabled || nearbyRequested;
+		var manualGroups = nearbyRequested;
+		var shouldSync = SyncScopeRules.ShouldScan(paused, config.Enabled, manualGroups);
 		nearbyRequested = false;
 		samples.Clear();
 		detectedPlayers.Clear();
 		var live = new Dictionary<ulong, IGameObject>();
 		foreach(var obj in Objects) {
-			if(obj.ObjectKind != ObjectKind.Pc || obj.ObjectIndex >= 200) continue;
+			if(obj.ObjectKind != ObjectKind.Pc || !(manualGroups ? IsManualPlayer(obj) : obj.ObjectIndex < 200)) continue;
 			if(obj is IPlayerCharacter p && PlayerSoundKey(obj) is { } playerKey)
 				detectedPlayers[playerKey] = $"{p.Name.TextValue}@{p.HomeWorld.Value.Name}";
 			if(!AnimationSampling.TryRead(obj, ResolveTimelineKey, out var sample, out _)) continue;
+			// GPose copies may reuse world IDs; the address uniquely identifies each loaded copy.
+			if(Client.IsGPosing) sample = sample with { Id = (ulong)obj.Address };
 			samples.Add(sample);
 			live[sample.Id] = obj;
 		}
@@ -237,11 +245,11 @@ public sealed partial class AnimSync : IDalamudPlugin {
 		}
 	}
 	private unsafe void SyncTarget(ulong targetId, nint targetAddress, DateTime now) {
-		var self = Objects.LocalPlayer;
+		var self = ManualSelf();
 		if(self == null) { Chat.Print("[AnimSync] No local player is loaded."); return; }
 		var target = Objects.FirstOrDefault(o => o.GameObjectId == targetId && o.Address == targetAddress &&
-			o.ObjectKind == ObjectKind.Pc && o.ObjectIndex < 200);
-		if(target == null || target.GameObjectId == self.GameObjectId) {
+			IsManualPlayer(o));
+		if(target == null || target.Address == self.Address) {
 			Chat.Print("[AnimSync] Select another loaded player to sync with.");
 			return;
 		}
@@ -396,7 +404,6 @@ public sealed partial class AnimSync : IDalamudPlugin {
 			ImGui.SetNextItemWidth(sliderWidth);
 			changed |= ImGui.SliderFloat("Check Refresh Time", ref c.CooldownSeconds, 0f, 5f, "%.2f s");
 			Help("Minimum wait before automatically syncing the same players again. At 0, checks run every game update with no added cooldown.");
-			ImGui.BeginDisabled(IsPaused);
 			if(ImGui.Button("Sync Groups")) plugin.nearbyRequested = true;
 			ButtonHelp("Sync Groups", "Syncs nearby groups whose animations have matching frame counts and timing but are on different frames.");
 			ImGui.SameLine();
@@ -410,7 +417,6 @@ public sealed partial class AnimSync : IDalamudPlugin {
 				ImGui.NewLine();
 			if(ImGui.Button("Sync Target")) plugin.OnCommand("/animsync", "target");
 			ButtonHelp("Sync Target", "Syncs only your animation and your selected player's animation, regardless of distance or matching frames.");
-			ImGui.EndDisabled();
 			ImGui.BeginDisabled(plugin.positionAlignment.BlockReason != null);
 			if(ImGui.Button("Sync Position")) plugin.positionRequested = true;
 			ButtonHelp("Sync Position", "Matches your position and facing to your target within 0.5 yalms. With no target, uses the closest player within 0.5 yalms. Unavailable in combat, duties or cutscenes.");
@@ -427,7 +433,7 @@ public sealed partial class AnimSync : IDalamudPlugin {
 				ImGui.SetNextItemWidth(-1);
 				changed |= ImGui.InputTextWithHint("##TimeSyncPhrase", "Shared phrase...", ref c.TimeSyncPhrase, 181);
 				if(!TimeSyncRules.ValidPhrase(c.TimeSyncPhrase)) ImGui.TextWrapped("Enter up to 180 UTF-8 bytes without control characters or chat placeholders (<...>).");
-				ImGui.BeginDisabled(IsPaused || !TimeSyncRules.ValidPhrase(c.TimeSyncPhrase));
+				ImGui.BeginDisabled(!TimeSyncRules.ValidPhrase(c.TimeSyncPhrase));
 				if(ImGui.Button("Time Sync Party")) plugin.QueueTimeSyncSend(true);
 				ButtonHelp("Time Sync Party", "Sends your shared phrase to party chat. Participants need Same time sync enabled with the same phrase.");
 				ImGui.SameLine();

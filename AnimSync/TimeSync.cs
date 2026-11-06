@@ -47,7 +47,7 @@ public sealed partial class AnimSync {
     }
     private unsafe void ProcessTimeSync(DateTime now) {
         var self = Objects.LocalPlayer;
-        if(!config.SameTimeSync || !TimeSyncRules.ValidPhrase(config.TimeSyncPhrase) || self == null || IsPaused ||
+        if(!config.SameTimeSync || !TimeSyncRules.ValidPhrase(config.TimeSyncPhrase) || self == null ||
             Conditions[ConditionFlag.BetweenAreas] || Conditions[ConditionFlag.BetweenAreas51]) {
             ClearTimeSync(); return;
         }

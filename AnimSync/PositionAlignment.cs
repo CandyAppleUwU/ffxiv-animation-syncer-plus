@@ -21,8 +21,8 @@ internal sealed class PositionAlignment(IObjectTable objects, ITargetManager tar
 		conditions[ConditionFlag.InCombat] ? "Position sync is unavailable during combat."
 		: conditions[ConditionFlag.BoundByDuty] || conditions[ConditionFlag.BoundByDuty56] || conditions[ConditionFlag.BoundByDuty95]
 			? "Position sync is unavailable in duties."
-		: conditions[ConditionFlag.WatchingCutscene] || conditions[ConditionFlag.WatchingCutscene78] || conditions[ConditionFlag.OccupiedInCutSceneEvent]
-			? "Position sync is unavailable during cutscenes."
+		: conditions[ConditionFlag.WatchingCutscene] || conditions[ConditionFlag.WatchingCutscene78] || conditions[ConditionFlag.OccupiedInCutSceneEvent] || client.IsGPosing
+			? "Position sync is unavailable during cutscenes or GPose."
 		: !client.IsLoggedIn || client.TerritoryType == 0 || conditions[ConditionFlag.BetweenAreas] || conditions[ConditionFlag.BetweenAreas51]
 			? "Wait until you finish loading before syncing position." : null;
 	public void Cancel() => snap = null;

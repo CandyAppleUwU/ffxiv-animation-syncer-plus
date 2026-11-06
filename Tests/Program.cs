@@ -97,3 +97,11 @@ Check(!TimeSyncRules.ValidPhrase(new string('a', 181)), "Oversize phrases are re
 Check(!TimeSyncRules.ValidPhrase(new string('界', 61)), "Multibyte characters count toward the byte limit");
 Check(TimeSyncRules.Due(1000, true) == 1300, "Outgoing echoes wait 300 ms");
 Check(TimeSyncRules.Due(1000, false) == 1000, "Incoming messages add no artificial delay");
+
+Check(!SyncScopeRules.ShouldScan(true, true, false), "Cutscenes and GPose block automatic groups");
+Check(SyncScopeRules.ShouldScan(true, true, true), "Manual groups still run while automatic sync is paused");
+Check(SyncScopeRules.ShouldScan(true, false, true), "Manual groups work during cutscenes with auto sync disabled");
+Check(!SyncScopeRules.ShouldScan(false, false, false), "Disabled automatic groups do not run without a request");
+Check(SyncScopeRules.IncludesPlayer(201, true) && SyncScopeRules.IncludesPlayer(439, true), "GPose includes its first and last actor slots");
+Check(!SyncScopeRules.IncludesPlayer(0, true) && !SyncScopeRules.IncludesPlayer(200, true) && !SyncScopeRules.IncludesPlayer(440, true), "GPose manual scope excludes world actors and UI slots");
+Check(SyncScopeRules.IncludesPlayer(0, false) && SyncScopeRules.IncludesPlayer(199, false) && !SyncScopeRules.IncludesPlayer(201, false), "World manual scope excludes GPose copies");

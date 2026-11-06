@@ -30,8 +30,8 @@ Open or close settings with `/animsync ui` or `/animsync settings`.
 - **Sync Position** matches your position and facing to your target within
   0.5 yalms. With no target, it picks the closest player in that range.
 
-Animation syncing pauses during cutscenes. Position alignment is additionally
-blocked during combat, duties, and loading.
+Automatic syncing and redraw recovery pause during cutscenes and GPose. Manual animation commands and buttons remain available; in GPose they use the visible GPose copies. Position alignment is additionally
+blocked during combat, duties, cutscenes, GPose, and loading.
 
 | Command | Action |
 | --- | --- |
@@ -54,13 +54,13 @@ Requires Windows, .NET 10 SDK, and Dalamud API 15 development libraries under
 
 This runs checks, builds the ZIP, and generates `repo.json` from the actual
 compiled manifest. It does not publish anything. The current release tag is
-`v1.3.41.0` and its asset must be named **AnimationSyncerPlus.zip**.
+`v1.3.42.0` and its asset must be named **AnimationSyncerPlus.zip**.
 
 For the first publication:
 
 1. Create the public GitHub repository `CandyAppleUwU/ffxiv-animation-syncer-plus`
    with branch `main` and push this source, including `repo.json` and `images/icon.png`.
-2. Create release **v1.3.41.0** and upload `dist/AnimationSyncerPlus.zip`.
+2. Create release **v1.3.42.0** and upload `dist/AnimationSyncerPlus.zip`.
 3. Verify the release download, icon URL, and raw repository index before
    sharing the installation link.
 
@@ -79,4 +79,4 @@ Enable **Same time sync (Experimental)** below Perfect Frame Sync on each client
 
 A matching party message restarts loaded party members locally. A matching tell restarts you and the other player locally. The sender waits 300 ms after its outgoing chat event; recipients restart on the next game update. This is approximate chat-based coordination, not a guarantee of simultaneous playback across clients. There is no handshake confirming that another client has enabled the feature.
 
-This mode restarts from the beginning, independently of Perfect Frame Sync. Normal animation exclusions, cutscene blocking, the sound toggle, and DJ exclusions apply. Repeated triggers and sends are limited to once per two seconds. Unloaded players cannot be synchronized. Phrases allow at most 180 UTF-8 bytes and cannot contain control characters or `<...>` chat placeholders. The feature defaults to off.
+This mode restarts from the beginning, independently of Perfect Frame Sync. Normal animation exclusions, the sound toggle, and DJ exclusions apply. Matching chat triggers are explicit requests and are not blocked by the automatic cutscene pause. Repeated triggers and sends are limited to once per two seconds. Unloaded players cannot be synchronized. Phrases allow at most 180 UTF-8 bytes and cannot contain control characters or `<...>` chat placeholders. The feature defaults to off.

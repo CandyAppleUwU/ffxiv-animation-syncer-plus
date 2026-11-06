@@ -20,8 +20,7 @@ Sync Position sits below the animation sync buttons. It shares the
 `/animsync pos` and `/animsync align` action. All five sync buttons have
 descriptive tooltips after one continuous second of hover, including while
 disabled. Position alignment is always disabled during combat, duties,
-cutscenes and loading. The other animation buttons keep their existing
-cutscene-only pause.
+cutscenes and loading. Manual animation buttons remain available in cutscenes and GPose.
 
 Perfect Frame Sync is below the manual sync buttons, followed by red
 "(Experimental)" and a `(?)` explaining leader-frame matching. Sync Target uses
@@ -42,12 +41,11 @@ Test a new starter joining a nearby 200-frame dance at frame 150, matching at
 loop boundaries and varying facial clip lengths. Skeletal control seeking does
 not reconstruct timeline-driven facial transitions or make audio catch up.
 
-Cutscene pause is always enabled, with no UI or configuration setting. It checks
-Dalamud WatchingCutscene, WatchingCutscene78 and OccupiedInCutSceneEvent. All
-animation sync and redraw sound recovery pause during cutscenes; manual buttons
-are disabled, command requests are rejected once in chat, and queued redraw
-recovery is discarded. Automatic checks resume afterward. Combat does not pause
-syncing. The old saved PauseDuringCombatCutscenes value is ignored.
+Automatic group sync and redraw recovery always pause in cutscenes and GPose.
+Manual commands and buttons remain usable, including manual groups, near, target,
+everyone and body. GPose manual selection uses slots 201-439, GPoseTarget, and
+the local player's GPose copy. The settings window remains visible in cutscenes
+and GPose. Position remains blocked. Combat does not pause animation syncing.
 
 The restart cooldown slider is labeled "Check Refresh Time" and accepts 0–5
 seconds, displayed to two decimal places. Zero (0.00 s) removes the
@@ -122,7 +120,7 @@ player. It does not execute an emote or move the target.
   Captures target identity when issued and revalidates it on the framework
   update. Both must be loaded and have eligible animations; otherwise neither
   is reset. Does not require distance, matching frame counts or differing current
-  frames. Cutscene pause, Sync sound and DJ protection apply. NPCs, self-targets
+  frames. Sync sound and DJ protection apply. Cutscenes do not block this manual request. NPCs, self-targets
   and departed/replaced targets are rejected. Test with automatic sync off to
   isolate the manual pair from independent automatic/redraw activity.
 
@@ -163,9 +161,8 @@ DJ music remains uninterrupted during manual sync, automatic sync and redraw.
 Verify sound recovery after a Penumbra mod change/redraw with no real emote
 execution on another client. Check logout, loading, actors leaving render range
 and plugin reload. Ensure removed debug UI and counters do not appear.
-Check combat does not pause syncing, while ordinary/event cutscenes always do.
-Ensure neither automatic grouping, redraw recovery nor manual requests restart
-animations during cutscenes. Verify checks resume afterward, old redraw events
+Check combat does not pause animation syncing. Cutscenes and GPose block automatic
+grouping and redraw recovery, while manual requests still work. Verify checks resume afterward, old redraw events
 do not burst on resume, and old settings cannot disable the cutscene pause.
 Check position alignment at 0.49, 0.5 and 0.51 yalms, target/self/NPC/no-target
 cases, closest-player selection and facing wraparound. Verify no movement or
@@ -191,9 +188,16 @@ No deployment or publishing has been performed by the agent.
 1. On both clients enable Same time sync and use the same phrase. Disable Auto Sync temporarily to isolate this feature.
 2. With both players performing allowed emotes, send the exact phrase manually in a tell. Verify both clients restart the pair; check which client leads with the fixed 300 ms compensation.
 3. Repeat with Time Sync Target, then manually in party and with Time Sync Party using three clients. Confirm unrelated nearby players do not restart and no automatic chat replies are sent.
-4. Check a different phrase/case, say/shout, disabled feature, loading/zone change, cutscenes, and changing the phrase during a pending sender delay. None should run a queued restart.
+4. Check a different phrase/case, say/shout, disabled feature, loading/zone change, and changing the phrase during a pending sender delay. None should run a queued restart.
 5. Check rapid repeated messages/buttons, no party, self/non-player target, different home worlds, and an unloaded tell sender. Confirm there is no burst of restarts or unwanted messages.
 6. Verify Sync sound off and DJ exclusions preserve audio; excluded animations remain untouched. Test Perfect Frame Sync both ways: this chat feature always restarts at the beginning.
 7. Re-enable Auto Sync and test together. Confirm no immediate second auto restart after a chat sync. Check logout and plugin reload for stale callbacks.
 
 Automated checks cover phrase matching, input validation, UTF-8 limits, and timing offsets. Actual chat payload identity, delivery timing, rendered UI, audio, and cross-client playback require the above in-game tests.
+
+### 1.3.42 cutscene / GPose correction
+- During a cutscene verify manual everyone, body, near, target and groups requests are processed and their buttons remain enabled. Automatic group sync and redraw recovery must stay paused.
+- In GPose repeat manual tests with two visible player copies. Near You should use your GPose copy as its center; Target should use the GPose target; Groups should sample copies rather than hidden world actors. Everyone/body should affect GPose actors.
+- Verify position commands and button remain blocked in GPose, cutscenes, duties and combat. Check the settings window stays visible in GPose/cutscenes.
+- Check shared-phrase requests are not discarded by the automatic cutscene pause, subject to the game's own chat availability.
+- Verify exiting GPose restores normal world selection. Native playback, GPose frozen actors, and UI visibility still require in-game validation.

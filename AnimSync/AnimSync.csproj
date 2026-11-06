@@ -5,7 +5,7 @@
 		<Authors>CandyApple</Authors>
 		<Product>Animation Syncer Plus</Product>
 		<Title>Animation Syncer Plus</Title>
-		<Version>1.3.41</Version>
+		<Version>1.3.42</Version>
 		<VersionComponents>3</VersionComponents>
 
 		<TargetFramework>net10.0-windows</TargetFramework>
