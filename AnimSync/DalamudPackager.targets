@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project>
+  <Target Name="PackagePlugin" AfterTargets="Build">
+    <!-- Keep the local icon inside the archive, including when manually installing. -->
+    <DalamudPackager ProjectDir="$(ProjectDir)" OutputPath="$(OutputPath)"
+                    AssemblyName="$(AssemblyName)" VersionComponents="4"
+                    MakeZip="true" HandleImages="false"
+                    Include="AnimSync.dll;AnimSync.pdb;AnimSync.deps.json;AnimSync.json;images/icon.png;LICENSE;NOTICE"
+                    Condition="'$(Configuration)' == 'Release'" />
+    <DalamudPackager ProjectDir="$(ProjectDir)" OutputPath="$(OutputPath)"
+                    AssemblyName="$(AssemblyName)" VersionComponents="4"
+                    MakeZip="false" Condition="'$(Configuration)' != 'Release'" />
+  </Target>
+</Project>

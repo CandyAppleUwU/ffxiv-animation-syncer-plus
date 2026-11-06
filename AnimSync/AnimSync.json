@@ -1,0 +1,13 @@
+{
+	"Author": "CandyApple",
+	"Name": "Animation Syncer Plus",
+	"Punchline": "Perfect and quick automatic matching animation syncing",
+	"Description": "Perfect and quick automatic matching animation syncing\n\nHow it works:\n1. Checks for players near each other within your selected distance.\n2. Checks that their animations have the same total frames, duration and playback speed.\n3. If they are on different frames, syncs their animations together.\n\nWith this enabled, you should rarely need to use animsync manually.",
+	"InternalName": "AnimSync",
+	"RepoUrl": "https://github.com/CandyAppleUwU/ffxiv-animation-syncer-plus",
+	"IconUrl": "https://raw.githubusercontent.com/CandyAppleUwU/ffxiv-animation-syncer-plus/main/images/icon.png",
+	"ApplicableVersion": "any",
+	"DalamudApiLevel": 15,
+	"LoadPriority": 1,
+	"Tags": ["animation", "sync", "emote", "animsync", "posing", "anims", "align", "position", "tool"]
+}

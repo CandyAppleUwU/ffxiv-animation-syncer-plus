@@ -1,0 +1,14 @@
+Animation Syncer Plus
+Modifications Copyright 2026 CandyApple
+
+Based on Animation Syncer by Sevii.
+Original project: https://github.com/Sevii77/animation_syncer
+Original copyright: Copyright 2024 Sevii
+Licensed under the Apache License, Version 2.0; see LICENSE.
+
+Animation Syncer Plus changes the original plugin implementation, animation
+control validation, build configuration, manifests, and repository metadata.
+It adds automatic nearby grouping, facial and sound timeline synchronization,
+Penumbra redraw recovery, DJ sound exclusions, optional leading-frame matching,
+position alignment adapted from the user's CoordMatch tool, a settings window,
+release preparation, and validation checks.

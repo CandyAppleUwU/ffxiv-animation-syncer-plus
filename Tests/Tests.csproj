@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="../AnimSync/NearbyGroups.cs" Link="NearbyGroups.cs" />
+    <Compile Include="../AnimSync/ClipFrames.cs" Link="ClipFrames.cs" />
+    <Compile Include="../AnimSync/AnimationExclusions.cs" Link="AnimationExclusions.cs" />
+    <Compile Include="../AnimSync/SoundSyncPolicy.cs" Link="SoundSyncPolicy.cs" />
+    <Compile Include="../AnimSync/PositionRules.cs" Link="PositionRules.cs" />
+  </ItemGroup>
+</Project>
