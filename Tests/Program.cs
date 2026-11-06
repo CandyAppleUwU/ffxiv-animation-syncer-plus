@@ -82,3 +82,18 @@ Check(PositionRules.Closest(Vector3.Zero, 1, new[] { positionCandidates[0] }) ==
 Check(PositionRules.Closest(Vector3.Zero, 1, new[] { new PositionCandidate(2, new(0.6f, 0, 0)) }) == null, "No candidate in range means no alignment");
 Check(PositionRules.Closest(Vector3.Zero, 1, new[] { new PositionCandidate(4, new(0.2f, 0, 0)), positionCandidates[2] }) == 3, "Nearest-player ties are deterministic");
 Check(Math.Abs(PositionRules.AngleDelta(MathF.PI - 0.0001f, -MathF.PI + 0.0001f)) < 0.001f, "Facing comparison handles angle wraparound");
+
+Check(TimeSyncRules.Matches("Match anim with me c:", "Match anim with me c:"), "Shared phrases match exactly");
+Check(TimeSyncRules.Matches("  shared phrase ", "shared phrase"), "Outer whitespace is ignored");
+Check(!TimeSyncRules.Matches("shared phrase", "Shared phrase"), "Case differences do not trigger a restart");
+Check(!TimeSyncRules.Matches("shared phrase", "hello shared phrase"), "A phrase within another message does not trigger");
+Check(!TimeSyncRules.Matches("", ""), "Empty messages cannot trigger");
+Check(!TimeSyncRules.ValidPhrase(" \t"), "Whitespace-only phrases are invalid");
+Check(!TimeSyncRules.ValidPhrase("hello\n/party something"), "Multiline command injection is rejected");
+Check(!TimeSyncRules.ValidPhrase("hello\0there"), "Null bytes cannot truncate the outgoing command");
+Check(!TimeSyncRules.ValidPhrase("hello <t>"), "Chat placeholders cannot change a sent phrase");
+Check(TimeSyncRules.ValidPhrase(new string('a', 180)), "The phrase byte limit is inclusive");
+Check(!TimeSyncRules.ValidPhrase(new string('a', 181)), "Oversize phrases are rejected");
+Check(!TimeSyncRules.ValidPhrase(new string('界', 61)), "Multibyte characters count toward the byte limit");
+Check(TimeSyncRules.Due(1000, true) == 1300, "Outgoing echoes wait 300 ms");
+Check(TimeSyncRules.Due(1000, false) == 1000, "Incoming messages add no artificial delay");

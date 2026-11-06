@@ -17,3 +17,8 @@ Animation Syncer by Sevii.
 
 Experimental frame matching does not seek audio. Position alignment is blocked
 during combat, duties, cutscenes, and loading.
+
+## 1.3.41.0
+- Added Same time sync below Perfect Frame Sync, with a saved shared phrase and party/target chat buttons.
+- Manual matching party/tell messages also trigger; outgoing events wait 300 ms and incoming events run next update.
+- Restricts restarts to the tell pair or loaded party, preserves sound/DJ and cutscene rules, and limits repeated triggers.

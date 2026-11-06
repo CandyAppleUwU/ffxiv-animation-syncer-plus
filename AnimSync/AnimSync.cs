@@ -23,7 +23,7 @@ using Newtonsoft.Json;
 
 namespace AnimSync;
 
-public sealed class AnimSync : IDalamudPlugin {
+public sealed partial class AnimSync : IDalamudPlugin {
 	[PluginService] public static IDalamudPluginInterface Interface { get; private set; } = null!;
 	[PluginService] public static IFramework Framework { get; private set; } = null!;
 	[PluginService] public static ICommandManager Commands { get; private set; } = null!;
@@ -73,12 +73,15 @@ public sealed class AnimSync : IDalamudPlugin {
 		Interface.UiBuilder.OpenConfigUi += OpenSettings;
 		Interface.UiBuilder.OpenMainUi += OpenSettings;
 		Framework.Update += Tick;
+		Chat.ChatMessage += OnTimeSyncChat;
 		Commands.AddHandler("/animsync", new CommandInfo(OnCommand) {
 			HelpMessage = "'ui'/'settings': menu; 'groups': sync groups; 'everyone': sync everyone; 'near': sync near you; 'target': sync you and target; 'pos'/'align': match position/facing within 0.5y; 'toggle': auto sync; 'body': body reset.",
 		});
 	}
 	public void Dispose() {
 		disposed = true;
+		Chat.ChatMessage -= OnTimeSyncChat;
+		ClearTimeSync();
 		positionAlignment.Cancel();
 		redrawSubscriber?.Unsubscribe(OnCharacterRedrawn);
 		pendingRedraws.Clear();
@@ -154,6 +157,7 @@ public sealed class AnimSync : IDalamudPlugin {
 		positionAlignment.Update();
 		var now = DateTime.UtcNow;
 		var paused = IsPaused;
+		ProcessTimeSync(now);
 		ProcessRedrawRecovery(now, paused);
 		if(paused) {
 			if(restartRequested || bodyRequested || nearYouRequested || nearbyRequested || targetSyncRequest.HasValue)
@@ -324,15 +328,18 @@ public sealed class AnimSync : IDalamudPlugin {
 	}
 	[Serializable]
 	public sealed class Settings : IPluginConfiguration {
-		public int Version { get; set; } = 5;
+		public int Version { get; set; } = 6;
 		public bool Enabled = true;
 		public bool SyncSound = true;
 		public bool MatchLeadingPlayer;
+		public bool SameTimeSync;
+		public string TimeSyncPhrase = "Match anim with me c:";
 		public Dictionary<string, string> DjPlayers = new();
 		public float Distance = 0.60f;
 		public float CooldownSeconds = 3f;
 		public void Normalize() {
-			Version = 5;
+			Version = 6;
+			TimeSyncPhrase ??= string.Empty;
 			DjPlayers ??= new();
 			Distance = float.IsFinite(Distance) ? Math.Clamp(Distance, 0.1f, 2f) : 0.6f;
 			CooldownSeconds = float.IsFinite(CooldownSeconds) ? Math.Clamp(CooldownSeconds, 0f, 5f) : 3f;
@@ -412,7 +419,23 @@ public sealed class AnimSync : IDalamudPlugin {
 			ImGui.SameLine();
 			ImGui.TextColored(new Vector4(1f, 0.25f, 0.25f, 1f), "(Experimental)");
 			Help("Instead of restarting from the beginning, matches the animation frame to the person furthest ahead. Applies to Auto Sync and Sync Groups. Sound playback stays unchanged.");
-			if(changed) plugin.Save();
+			changed |= ImGui.Checkbox("Same time sync", ref c.SameTimeSync);
+			ImGui.SameLine();
+			ImGui.TextColored(new Vector4(1f, 0.25f, 0.25f, 1f), "(Experimental)");
+			Help("Enable on each participant's client with exactly the same phrase (case-sensitive). Sending the phrase manually or with the buttons restarts animations on each client. Party syncs loaded party members; tells sync you and the other player. The sender waits 300 ms to approximate delivery time; latency varies. Sound and DJ settings apply. Perfect Frame Sync does not apply to this restart.");
+			if(c.SameTimeSync) {
+				ImGui.SetNextItemWidth(-1);
+				changed |= ImGui.InputTextWithHint("##TimeSyncPhrase", "Shared phrase...", ref c.TimeSyncPhrase, 181);
+				if(!TimeSyncRules.ValidPhrase(c.TimeSyncPhrase)) ImGui.TextWrapped("Enter up to 180 UTF-8 bytes without control characters or chat placeholders (<...>).");
+				ImGui.BeginDisabled(IsPaused || !TimeSyncRules.ValidPhrase(c.TimeSyncPhrase));
+				if(ImGui.Button("Time Sync Party")) plugin.QueueTimeSyncSend(true);
+				ButtonHelp("Time Sync Party", "Sends your shared phrase to party chat. Participants need Same time sync enabled with the same phrase.");
+				ImGui.SameLine();
+				if(ImGui.Button("Time Sync Target")) plugin.QueueTimeSyncSend(false);
+				ButtonHelp("Time Sync Target", "Sends your shared phrase in a tell to your targeted player. Both clients need Same time sync enabled with the same phrase.");
+				ImGui.EndDisabled();
+			}
+			if(changed) { plugin.ClearTimeSync(); plugin.Save(); }
 			ImGui.Separator();
 			if(ImGui.CollapsingHeader("DJs (Sound Sync Exclusions)")) {
 				ImGui.TextWrapped("Keeps DJs music uninterrupted when animations sync. This is only really needed when anim syncing everyone.");

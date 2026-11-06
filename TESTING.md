@@ -186,3 +186,14 @@ Everyone/Near You manual resets, and DJ music remains protected in each mode.
 - Redraw event: https://github.com/Ottermandias/Penumbra.Api
 
 No deployment or publishing has been performed by the agent.
+
+### Same time sync — requires two clients
+1. On both clients enable Same time sync and use the same phrase. Disable Auto Sync temporarily to isolate this feature.
+2. With both players performing allowed emotes, send the exact phrase manually in a tell. Verify both clients restart the pair; check which client leads with the fixed 300 ms compensation.
+3. Repeat with Time Sync Target, then manually in party and with Time Sync Party using three clients. Confirm unrelated nearby players do not restart and no automatic chat replies are sent.
+4. Check a different phrase/case, say/shout, disabled feature, loading/zone change, cutscenes, and changing the phrase during a pending sender delay. None should run a queued restart.
+5. Check rapid repeated messages/buttons, no party, self/non-player target, different home worlds, and an unloaded tell sender. Confirm there is no burst of restarts or unwanted messages.
+6. Verify Sync sound off and DJ exclusions preserve audio; excluded animations remain untouched. Test Perfect Frame Sync both ways: this chat feature always restarts at the beginning.
+7. Re-enable Auto Sync and test together. Confirm no immediate second auto restart after a chat sync. Check logout and plugin reload for stale callbacks.
+
+Automated checks cover phrase matching, input validation, UTF-8 limits, and timing offsets. Actual chat payload identity, delivery timing, rendered UI, audio, and cross-client playback require the above in-game tests.
