@@ -43,32 +43,6 @@ blocked during combat, duties, cutscenes, GPose, and loading.
 | `/animsync toggle` | Toggle automatic synchronization |
 | `/animsync ui` or `/animsync settings` | Toggle the menu |
 
-## Build and release
-
-Requires Windows, .NET 10 SDK, and Dalamud API 15 development libraries under
-`%APPDATA%/XIVLauncher/addon/Hooks/dev`, or set `DALAMUD_HOME` to that directory.
-
-```powershell
-./prepare-release.ps1
-```
-
-This runs checks, builds the ZIP, and generates `repo.json` from the actual
-compiled manifest. It does not publish anything. The current release tag is
-`v1.3.42.0` and its asset must be named **AnimationSyncerPlus.zip**.
-
-For the first publication:
-
-1. Create the public GitHub repository `CandyAppleUwU/ffxiv-animation-syncer-plus`
-   with branch `main` and push this source, including `repo.json` and `images/icon.png`.
-2. Create release **v1.3.42.0** and upload `dist/AnimationSyncerPlus.zip`.
-3. Verify the release download, icon URL, and raw repository index before
-   sharing the installation link.
-
-For later updates, bump the project version, run the script, publish the
-matching versioned release asset, and push the updated `repo.json`. Keep the
-internal plugin name `AnimSync` unchanged so existing installations/settings
-continue to work.
-
 ## Credits and license
 
 Original Animation Syncer: Copyright 2024 Sevii. Modifications: CandyApple.
