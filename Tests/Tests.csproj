@@ -6,6 +6,30 @@
     <Nullable>enable</Nullable>
   </PropertyGroup>
   <ItemGroup>
+    <Compile Include="../AnimSync/LinkedTimelineClock.cs" Link="LinkedTimelineClock.cs" />
+    <Compile Include="../AnimSync/MusicAutoTakeover.cs" Link="MusicAutoTakeover.cs" />
+    <Compile Include="../AnimSync/SoundCallOwnership.cs" Link="SoundCallOwnership.cs" />
+    <Compile Include="../AnimSync/AvfxSoundReferences.cs" Link="AvfxSoundReferences.cs" />
+    <Compile Include="../AnimSync/SoundExport.cs" Link="SoundExport.cs" />
+    <Compile Include="../AnimSync/SoundProbeRules.cs" Link="SoundProbeRules.cs" />
+    <Compile Include="../AnimSync/LoopingWaveProvider.cs" Link="LoopingWaveProvider.cs" />
+    <Compile Include="../AnimSync/MusicVolume.cs" Link="MusicVolume.cs" />
+    <Compile Include="../AnimSync/MusicEqualizer.cs" Link="MusicEqualizer.cs" />
+    <Compile Include="../AnimSync/MusicReverb.cs" Link="MusicReverb.cs" />
+    <Compile Include="../AnimSync/ScdSoundInfo.cs" Link="ScdSoundInfo.cs" />
+    <Compile Include="../AnimSync/MusicControlRules.cs" Link="MusicControlRules.cs" />
+    <Compile Include="../AnimSync/SoundSlotTracker.cs" Link="SoundSlotTracker.cs" />
+    <Compile Include="../AnimSync/PapSoundReferences.cs" Link="PapSoundReferences.cs" />
+    <Compile Include="../AnimSync/MusicInference.cs" Link="MusicInference.cs" />
+    <Compile Include="../AnimSync/MusicRules.cs" Link="MusicRules.cs" />
+    <PackageReference Include="NAudio.Vorbis" Version="1.5.0" />
+    <PackageReference Include="NAudio.Core" Version="2.2.1" />
+    <PackageReference Include="NVorbis" Version="0.10.5" />
+    <Compile Include="../AnimSync/ScdVorbisClip.cs" Link="ScdVorbisClip.cs" />
+    <Compile Include="../AnimSync/TimelineStepRepeat.cs" Link="TimelineStepRepeat.cs" />
+    <Compile Include="../AnimSync/TimelineGroups.cs" Link="TimelineGroups.cs" />
+    <Compile Include="../AnimSync/TimelineScrubState.cs" Link="TimelineScrubState.cs" />
+    <Compile Include="../AnimSync/TimelineRules.cs" Link="TimelineRules.cs" />
     <Compile Include="../AnimSync/SyncScopeRules.cs" Link="SyncScopeRules.cs" />
     <Compile Include="../AnimSync/TimeSyncRules.cs" Link="TimeSyncRules.cs" />
     <Compile Include="../AnimSync/NearbyGroups.cs" Link="NearbyGroups.cs" />

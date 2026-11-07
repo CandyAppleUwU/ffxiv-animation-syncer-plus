@@ -1,5 +1,6 @@
 // Added for the body/face/sound restart modification. Native playback needs in-game validation.
 using System;
+using System.Collections.Generic;
 using FFXIVClientStructs.FFXIV.Client.Game.Character;
 using FFXIVClientStructs.FFXIV.Client.Graphics.Render;
 using FFXIVClientStructs.FFXIV.Client.Graphics.Scene;
@@ -7,19 +8,46 @@ using FFXIVClientStructs.FFXIV.Client.Graphics.Scene;
 namespace AnimSync;
 
 internal static unsafe class AnimationRestart {
-	public static void MatchTime(Character* character, float time) {
+	// Return fresh controls; callers must reacquire membership before using stored addresses.
+	public static List<nint> ActiveControls(Character* character) {
+		var result = new List<nint>();
+		var skeleton = GetSkeleton(character);
+		if(skeleton == null) return result;
+		for(var partial = 0; partial < skeleton->PartialSkeletonCount; partial++)
+			for(var bank = 0; bank < 2; bank++) {
+				var animated = skeleton->PartialSkeletons[partial].GetHavokAnimatedSkeleton(bank);
+				if(animated == null) continue;
+				for(var i = 0; i < animated->AnimationControls.Length; i++) {
+					var c = animated->AnimationControls[i].Value;
+					if(c == null || c->hkaAnimationControl.Binding.ptr == null || c->hkaAnimationControl.Binding.ptr->Animation.ptr == null ||
+						c->EaseStatus is FFXIVClientStructs.Havok.Animation.Playback.Control.Default.hkaDefaultAnimationControl.EaseStatusEnum.EasedOut
+						or FFXIVClientStructs.Havok.Animation.Playback.Control.Default.hkaDefaultAnimationControl.EaseStatusEnum.EasingOut) continue;
+					if(!result.Contains((nint)c)) result.Add((nint)c);
+				}
+			}
+		return result;
+	}
+	public static void MatchTime(Character* character, float time, Character* cueLeader) {
 		if(!float.IsFinite(time) || time < 0) return;
+		if(cueLeader != null) {
+			var source = cueLeader->Timeline.TimelineSequencer.GetSchedulerTimeline(0);
+			var target = character->Timeline.TimelineSequencer.GetSchedulerTimeline(0);
+			// Only copy a clock within the same native cue timeline. Visual matching is independent of this check.
+			if(source != null && target != null && source->SchedulerResource != null && source->SchedulerResource == target->SchedulerResource &&
+				float.IsFinite(source->CurrentTimestamp) && source->CurrentTimestamp > target->CurrentTimestamp)
+				target->CurrentTimestamp = source->CurrentTimestamp;
+		}
 		ResetAnimationControls(character, time, true);
 	}
-	public static int Restart(Character* character, bool syncSound, ushort baseTimeline = 0) {
+	public static int Restart(Character* character, bool syncSound, ushort baseTimeline = 0, bool resumePaused = false) {
 		var skeleton = GetSkeleton(character);
 		if(skeleton == null) return 0;
-		var restarted = syncSound ? RestartTimelines(character, baseTimeline) : 0;
-		ResetAnimationControls(character);
+		var restarted = syncSound ? RestartTimelines(character, baseTimeline, resumePaused) : 0;
+		ResetAnimationControls(character, resumePaused: resumePaused);
 		return restarted;
 	}
 
-	private static int RestartTimelines(Character* character, ushort baseTimeline) {
+	private static int RestartTimelines(Character* character, ushort baseTimeline, bool resumePaused) {
 		var sequencer = &character->Timeline.TimelineSequencer;
 		// Snapshot before stopping anything: changing a slot can affect other slots.
 		Span<ushort> timelines = stackalloc ushort[sequencer->TimelineIds.Length];
@@ -43,13 +71,13 @@ internal static unsafe class AnimationRestart {
 		for(var slot = 0; slot < timelines.Length; slot++) {
 			if(timelines[slot] == 0) continue;
 			sequencer->PlayTimeline(timelines[slot]);
-			sequencer->SetSlotSpeed((uint)slot, speeds[slot]);
+			sequencer->SetSlotSpeed((uint)slot, resumePaused && speeds[slot] == 0 ? 1 : speeds[slot]);
 			restarted++;
 		}
 		return restarted;
 	}
 
-	private static void ResetAnimationControls(Character* character, float time = 0, bool seeking = false) {
+	private static void ResetAnimationControls(Character* character, float time = 0, bool seeking = false, bool resumePaused = false) {
 		// Facial/lip controls need not be on the body's first partial skeleton.
 		// Reacquire after native playback, which may replace animation controls.
 		// With sound sync off this is the only operation: no scheduler replay.
@@ -63,13 +91,17 @@ internal static unsafe class AnimationRestart {
 					var control = animated->AnimationControls[index].Value;
 					if(control == null || control->hkaAnimationControl.Binding.ptr == null ||
 						control->hkaAnimationControl.Binding.ptr->Animation.ptr == null) continue;
+					if((seeking || resumePaused) && control->EaseStatus is FFXIVClientStructs.Havok.Animation.Playback.Control.Default.hkaDefaultAnimationControl.EaseStatusEnum.EasedOut
+						or FFXIVClientStructs.Havok.Animation.Playback.Control.Default.hkaDefaultAnimationControl.EaseStatusEnum.EasingOut) continue;
 					if(seeking) {
-						if(control->EaseStatus is FFXIVClientStructs.Havok.Animation.Playback.Control.Default.hkaDefaultAnimationControl.EaseStatusEnum.EasedOut
-							or FFXIVClientStructs.Havok.Animation.Playback.Control.Default.hkaDefaultAnimationControl.EaseStatusEnum.EasingOut || control->PlaybackSpeed <= 0) continue;
+						if(control->PlaybackSpeed <= 0) continue;
 						var duration = control->hkaAnimationControl.Binding.ptr->Animation.ptr->Duration;
 						if(!float.IsFinite(duration) || duration <= 0) continue;
 						control->hkaAnimationControl.LocalTime = Math.Clamp(time, 0, duration);
-					} else control->hkaAnimationControl.LocalTime = 0;
+					} else {
+						control->hkaAnimationControl.LocalTime = 0;
+						if(resumePaused && control->PlaybackSpeed == 0) control->PlaybackSpeed = 1;
+					}
 				}
 			}
 		}

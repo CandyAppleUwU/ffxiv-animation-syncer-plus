@@ -8,6 +8,15 @@ namespace AnimSync;
 internal readonly record struct PositionCandidate(ulong Id, Vector3 Position);
 internal static class PositionRules {
 	public const float MaxDistance = 0.5f;
+	public static bool AllowsAnimation(string? papPath) {
+		if(string.IsNullOrEmpty(papPath) || !papPath.EndsWith(".pap", StringComparison.OrdinalIgnoreCase)) return false;
+		var path = "/" + papPath.Replace('\\', '/');
+		if(path.EndsWith("/resident/idle.pap", StringComparison.OrdinalIgnoreCase) ||
+			path.EndsWith("/resident/move_a.pap", StringComparison.OrdinalIgnoreCase)) return true;
+		var fileStart = path.LastIndexOf('/') + 1;
+		return path.AsSpan(0, fileStart).EndsWith("/emote/", StringComparison.OrdinalIgnoreCase) &&
+			path.AsSpan(fileStart).StartsWith("pose", StringComparison.OrdinalIgnoreCase);
+	}
 	public static bool InRange(Vector3 self, Vector3 other) {
 		var distance = Vector3.DistanceSquared(self, other);
 		return float.IsFinite(distance) && distance <= MaxDistance * MaxDistance;

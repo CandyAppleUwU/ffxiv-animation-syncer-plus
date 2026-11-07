@@ -5,7 +5,7 @@
     <DalamudPackager ProjectDir="$(ProjectDir)" OutputPath="$(OutputPath)"
                     AssemblyName="$(AssemblyName)" VersionComponents="4"
                     MakeZip="true" HandleImages="false"
-                    Include="AnimSync.dll;AnimSync.pdb;AnimSync.deps.json;AnimSync.json;images/icon.png;LICENSE;NOTICE"
+                    Include="AnimSync.dll;AnimSync.pdb;AnimSync.deps.json;AnimSync.json;NAudio.Core.dll;NAudio.WinMM.dll;NAudio.Vorbis.dll;NVorbis.dll;images/icon.png;LICENSE;NOTICE;THIRD-PARTY-NOTICES.md"
                     Condition="'$(Configuration)' == 'Release'" />
     <DalamudPackager ProjectDir="$(ProjectDir)" OutputPath="$(OutputPath)"
                     AssemblyName="$(AssemblyName)" VersionComponents="4"

@@ -24,7 +24,9 @@ internal sealed class PositionAlignment(IObjectTable objects, ITargetManager tar
 		: conditions[ConditionFlag.WatchingCutscene] || conditions[ConditionFlag.WatchingCutscene78] || conditions[ConditionFlag.OccupiedInCutSceneEvent] || client.IsGPosing
 			? "Position sync is unavailable during cutscenes or GPose."
 		: !client.IsLoggedIn || client.TerritoryType == 0 || conditions[ConditionFlag.BetweenAreas] || conditions[ConditionFlag.BetweenAreas51]
-			? "Wait until you finish loading before syncing position." : null;
+			? "Wait until you finish loading before syncing position."
+		: objects.LocalPlayer is not { } self ? "No local player is loaded."
+		: !PositionRules.AllowsAnimation(AnimationSampling.CurrentPap(self)?.Path) ? "Can't adjust position while emoting." : null;
 	public void Cancel() => snap = null;
 	private void Reply(string message) => chat.Print($"[AnimSync] {message}");
 	private static unsafe bool Available(IGameObject obj) {

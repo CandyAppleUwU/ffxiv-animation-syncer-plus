@@ -39,6 +39,7 @@ public sealed partial class AnimSync : IDalamudPlugin {
 	private bool positionRequested;
 	private readonly Dictionary<ushort, string> timelineKeys = new();
 	private readonly Settings config;
+	private long audioSettingsSaveAt;
 	private readonly WindowSystem windows = new("AnimSync");
 	private readonly SettingsWindow settingsWindow;
 	private readonly Dictionary<ulong, DateTime> cooldowns = new();
@@ -69,6 +70,8 @@ public sealed partial class AnimSync : IDalamudPlugin {
 		positionAlignment = new PositionAlignment(Objects, Targets, Client, Conditions, Chat);
 		settingsWindow = new SettingsWindow(this);
 		windows.AddWindow(settingsWindow);
+		timelineWindow = new TimelineWindow(this);
+		windows.AddWindow(timelineWindow);
 		Interface.UiBuilder.DisableGposeUiHide = true;
 		Interface.UiBuilder.DisableCutsceneUiHide = true;
 		Interface.UiBuilder.Draw += windows.Draw;
@@ -77,11 +80,19 @@ public sealed partial class AnimSync : IDalamudPlugin {
 		Framework.Update += Tick;
 		Chat.ChatMessage += OnTimeSyncChat;
 		Commands.AddHandler("/animsync", new CommandInfo(OnCommand) {
-			HelpMessage = "'ui'/'settings': menu; 'groups': sync groups; 'everyone': sync everyone; 'near': sync near you; 'target': sync you and target; 'pos'/'align': match position/facing within 0.5y; 'toggle': auto sync; 'body': body reset.",
+			HelpMessage = "'ui'/'settings': menu; 'timeline': animation player; 'groups': sync groups; 'everyone': sync everyone; 'near': sync near you; 'target': sync you and target; 'pos'/'align': match position/facing within 0.5y; 'toggle': auto sync; 'body': body reset.",
 		});
 	}
 	public void Dispose() {
 		disposed = true;
+		Framework.Update -= Tick;
+		void CleanupPlayback() { ResetTimeline(); DisposeTimelineMusic(); }
+		if(Framework.IsInFrameworkUpdateThread) CleanupPlayback();
+		else if(!Framework.IsFrameworkUnloading) {
+			try { Framework.RunOnFrameworkThread(CleanupPlayback).GetAwaiter().GetResult(); }
+			catch(OperationCanceledException) { DisposeTimelineMusic(false); }
+		}
+		else DisposeTimelineMusic(false);
 		Chat.ChatMessage -= OnTimeSyncChat;
 		ClearTimeSync();
 		positionAlignment.Cancel();
@@ -97,6 +108,7 @@ public sealed partial class AnimSync : IDalamudPlugin {
 		cooldowns.Clear();
 		samples.Clear();
 		detectedPlayers.Clear();
+		if(audioSettingsSaveAt != 0) Save();
 	}
 	private void OpenSettings() => settingsWindow.IsOpen = true;
 	private void DrawDistancePreview() {
@@ -122,7 +134,8 @@ public sealed partial class AnimSync : IDalamudPlugin {
 			previousVisible = visible;
 		}
 	}
-	private void Save() { config.Normalize(); Interface.SavePluginConfig(config); }
+	private void ScheduleAudioSettingsSave() => audioSettingsSaveAt = Environment.TickCount64 + 300;
+	private void Save() { config.Normalize(); Interface.SavePluginConfig(config); audioSettingsSaveAt = 0; }
 	private static bool IsAutomaticSyncPaused => Conditions[ConditionFlag.WatchingCutscene] ||
 		Conditions[ConditionFlag.WatchingCutscene78] || Conditions[ConditionFlag.OccupiedInCutSceneEvent] || Client.IsGPosing;
 	private static bool IsManualPlayer(IGameObject obj) => obj.ObjectKind == ObjectKind.Pc &&
@@ -136,8 +149,8 @@ public sealed partial class AnimSync : IDalamudPlugin {
 		? SoundSyncPolicy.PlayerKey(p.Name.TextValue, p.HomeWorld.RowId) : null;
 	private bool CanSyncSound(IGameObject obj) => SoundSyncPolicy.CanSync(config.SyncSound,
 		obj.ObjectKind == ObjectKind.Pc, PlayerSoundKey(obj), config.DjPlayers);
-	private unsafe int RestartActor(IGameObject obj, ushort baseTimeline = 0) =>
-		AnimationRestart.Restart((Character*)obj.Address, CanSyncSound(obj), baseTimeline);
+	private unsafe int RestartActor(IGameObject obj, ushort baseTimeline = 0, bool resumePaused = false) =>
+		AnimationRestart.Restart((Character*)obj.Address, CanSyncSound(obj), baseTimeline, resumePaused);
 	private string ResolveTimelineKey(ushort id) {
 		if(timelineKeys.TryGetValue(id, out var key)) return key;
 		key = Data.GetExcelSheet<Lumina.Excel.Sheets.ActionTimeline>().TryGetRow(id, out var row) ? row.Key.ToString() : string.Empty;
@@ -157,11 +170,16 @@ public sealed partial class AnimSync : IDalamudPlugin {
 				else Chat.Print("[AnimSync] Select another player to sync with.");
 				break;
 			case "ui": case "settings": settingsWindow.IsOpen = !settingsWindow.IsOpen; break;
+			case "timeline": timelineWindow.IsOpen = !timelineWindow.IsOpen; break;
 			case "toggle": config.Enabled = !config.Enabled; Save(); break;
-			default: Chat.Print("Usage: /animsync [ui|settings|groups|everyone|near|target|pos|align|toggle|body]"); break;
+			default: Chat.Print("Usage: /animsync [ui|settings|timeline|groups|everyone|near|target|pos|align|toggle|body]"); break;
 		}
 	}
 	private unsafe void Tick(IFramework framework) {
+		if(disposed) return;
+		if(audioSettingsSaveAt != 0 && Environment.TickCount64 >= audioSettingsSaveAt) Save();
+		ProcessTimeline();
+		ProcessTimelineMusic();
 		if(positionRequested) { positionRequested = false; positionAlignment.Request(); }
 		positionAlignment.Update();
 		var now = DateTime.UtcNow;
@@ -217,6 +235,7 @@ public sealed partial class AnimSync : IDalamudPlugin {
 		var live = new Dictionary<ulong, IGameObject>();
 		foreach(var obj in Objects) {
 			if(obj.ObjectKind != ObjectKind.Pc || !(manualGroups ? IsManualPlayer(obj) : obj.ObjectIndex < 200)) continue;
+			if(!manualGroups && TimelineOwns(obj)) continue;
 			if(obj is IPlayerCharacter p && PlayerSoundKey(obj) is { } playerKey)
 				detectedPlayers[playerKey] = $"{p.Name.TextValue}@{p.HomeWorld.Value.Name}";
 			if(!AnimationSampling.TryRead(obj, ResolveTimelineKey, out var sample, out _)) continue;
@@ -237,8 +256,11 @@ public sealed partial class AnimSync : IDalamudPlugin {
 			var leader = config.MatchLeadingPlayer ? NearbyGroups.Leader(group) : (AnimationSample?)null;
 			foreach(var sample in group) {
 				if(leader is { } ahead) {
-					if(sample.Id != ahead.Id)
-						AnimationRestart.MatchTime((Character*)live[sample.Id].Address, ahead.LocalTime);
+					if(sample.Id != ahead.Id) {
+						var actor = live[sample.Id];
+						var cueLeader = CanSyncSound(actor) ? (Character*)live[ahead.Id].Address : null;
+						AnimationRestart.MatchTime((Character*)actor.Address, ahead.LocalTime, cueLeader);
+					}
 				} else RestartActor(live[sample.Id]);
 				cooldowns[sample.Id] = now.AddSeconds(config.CooldownSeconds);
 			}
@@ -302,6 +324,7 @@ public sealed partial class AnimSync : IDalamudPlugin {
 		foreach(var pair in new List<KeyValuePair<int, PendingRedraw>>(pendingRedraws)) {
 			var pending = pair.Value;
 			var obj = Objects[pair.Key];
+			if(obj != null && TimelineOwns(obj)) { pendingRedraws.Remove(pair.Key); continue; }
 			if(obj == null || obj.Address != pending.Address || obj.GameObjectId != pending.Id || obj.ObjectKind != ObjectKind.Pc || now > pending.Expires) {
 				pendingRedraws.Remove(pair.Key);
 				continue;
@@ -345,10 +368,16 @@ public sealed partial class AnimSync : IDalamudPlugin {
 		public Dictionary<string, string> DjPlayers = new();
 		public float Distance = 0.60f;
 		public float CooldownSeconds = 3f;
+		public float[] MusicEqualizerGains = new float[MusicEqualizer.Frequencies.Length];
+		public float MusicReverbAmount;
+		public float? TimelineMusicVolume;
 		public void Normalize() {
 			Version = 6;
 			TimeSyncPhrase ??= string.Empty;
 			DjPlayers ??= new();
+			MusicEqualizerGains = MusicEqualizer.Normalize(MusicEqualizerGains);
+			MusicReverbAmount = MusicVolume.Clamp(MusicReverbAmount);
+			if(TimelineMusicVolume is { } gain) TimelineMusicVolume = MusicVolume.ClampGain(gain);
 			Distance = float.IsFinite(Distance) ? Math.Clamp(Distance, 0.1f, 2f) : 0.6f;
 			CooldownSeconds = float.IsFinite(CooldownSeconds) ? Math.Clamp(CooldownSeconds, 0f, 5f) : 3f;
 		}
@@ -364,8 +393,13 @@ public sealed partial class AnimSync : IDalamudPlugin {
 			SizeConstraints = new WindowSizeConstraints { MinimumSize = new Vector2(400, 0), MaximumSize = new Vector2(600, 900) };
 		}
 		public override void Draw() {
-			var buttonWidth = ImGui.CalcTextSize("Discord").X + ImGui.GetStyle().FramePadding.X * 2;
-			var rightEdge = ImGui.GetCursorPosX() + ImGui.GetContentRegionAvail().X;
+			const string timelineLabel = "Animation Timeline";
+			var style = ImGui.GetStyle();
+			var timelineWidth = ImGui.CalcTextSize(timelineLabel).X + style.FramePadding.X * 2;
+			var discordWidth = ImGui.CalcTextSize("Discord").X + style.FramePadding.X * 2;
+			var leftEdge = ImGui.GetCursorPosX();
+			var rowWidth = ImGui.GetContentRegionAvail().X;
+			var discordStart = leftEdge + rowWidth - discordWidth;
 			var c = plugin.config;
 			var changed = ImGui.Checkbox("Auto Sync Anims", ref c.Enabled);
 			ImGui.SameLine();
@@ -384,7 +418,16 @@ public sealed partial class AnimSync : IDalamudPlugin {
 				ImGui.EndTooltip();
 			}
 			ImGui.SameLine();
-			ImGui.SetCursorPosX(Math.Max(ImGui.GetCursorPosX(), rightEdge - buttonWidth));
+			var timelineCenter = leftEdge + (rowWidth - timelineWidth) / 2;
+			ImGui.SetCursorPosX(Math.Max(ImGui.GetCursorPosX(), Math.Min(timelineCenter, discordStart - style.ItemSpacing.X - timelineWidth)));
+			ImGui.PushStyleColor(ImGuiCol.Button, new Vector4(.08f, .40f, .34f, 1));
+			ImGui.PushStyleColor(ImGuiCol.ButtonHovered, new Vector4(.08f, .49f, .42f, 1));
+			ImGui.PushStyleColor(ImGuiCol.ButtonActive, new Vector4(.06f, .32f, .27f, 1));
+			ImGui.PushStyleColor(ImGuiCol.Text, Vector4.One);
+			if(ImGui.Button(timelineLabel)) plugin.timelineWindow.IsOpen = !plugin.timelineWindow.IsOpen;
+			ImGui.PopStyleColor(4);
+			ImGui.SameLine();
+			ImGui.SetCursorPosX(Math.Max(ImGui.GetCursorPosX(), discordStart));
 			ImGui.PushStyleColor(ImGuiCol.Button, new Vector4(88f / 255, 101f / 255, 242f / 255, 1));
 			ImGui.PushStyleColor(ImGuiCol.ButtonHovered, new Vector4(71f / 255, 82f / 255, 196f / 255, 1));
 			ImGui.PushStyleColor(ImGuiCol.ButtonActive, new Vector4(60f / 255, 69f / 255, 165f / 255, 1));
@@ -417,14 +460,15 @@ public sealed partial class AnimSync : IDalamudPlugin {
 				ImGui.NewLine();
 			if(ImGui.Button("Sync Target")) plugin.OnCommand("/animsync", "target");
 			ButtonHelp("Sync Target", "Syncs only your animation and your selected player's animation, regardless of distance or matching frames.");
-			ImGui.BeginDisabled(plugin.positionAlignment.BlockReason != null);
+			var positionBlock = plugin.positionAlignment.BlockReason;
+			ImGui.BeginDisabled(positionBlock != null);
 			if(ImGui.Button("Sync Position")) plugin.positionRequested = true;
-			ButtonHelp("Sync Position", "Matches your position and facing to your target within 0.5 yalms. With no target, uses the closest player within 0.5 yalms. Unavailable in combat, duties or cutscenes.");
+			ButtonHelp("Sync Position", positionBlock ?? "Matches your position and facing to your target within 0.5 yalms. With no target, uses the closest player within 0.5 yalms.");
 			ImGui.EndDisabled();
 			changed |= ImGui.Checkbox("Perfect Frame Sync", ref c.MatchLeadingPlayer);
 			ImGui.SameLine();
 			ImGui.TextColored(new Vector4(1f, 0.25f, 0.25f, 1f), "(Experimental)");
-			Help("Instead of restarting from the beginning, matches the animation frame to the person furthest ahead. Applies to Auto Sync and Sync Groups. Sound playback stays unchanged.");
+			Help("Matches the animation frame to the person furthest ahead. Applies to Auto Sync and Sync Groups. With Sync Sound enabled, matching native cue timelines can align short effects without restarting music.");
 			changed |= ImGui.Checkbox("Same time sync", ref c.SameTimeSync);
 			ImGui.SameLine();
 			ImGui.TextColored(new Vector4(1f, 0.25f, 0.25f, 1f), "(Experimental)");
@@ -509,7 +553,7 @@ public sealed partial class AnimSync : IDalamudPlugin {
 			ImGui.PopTextWrapPos();
 			ImGui.EndTooltip();
 		}
-		private static void Help(string text) {
+		public static void Help(string text) {
 			ImGui.SameLine();
 			ImGui.TextDisabled("(?)");
 			if(!ImGui.IsItemHovered()) return;
