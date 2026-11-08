@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.3.113.0
+
+- Include supported emote summons in timeline playback, scrubbing, and speed controls.
+- Keep the player and summoned model on a shared playhead across speed changes, pauses, and loop restarts.
+- Advance native sound cues during forward playback and remove the temporary speed diagnostics.
+
 ## 1.3.100.0
 
 - Add Animation Timeline with frame scrubbing, play and pause, stepping, and separate timelines for targets and their groups. Animation speed ranges from −500% to +500%.

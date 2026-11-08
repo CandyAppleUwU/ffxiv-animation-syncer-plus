@@ -6,6 +6,7 @@
     <Nullable>enable</Nullable>
   </PropertyGroup>
   <ItemGroup>
+    <Compile Include="../AnimSync/TmbPropModels.cs" Link="TmbPropModels.cs" />
     <Compile Include="../AnimSync/LinkedTimelineClock.cs" Link="LinkedTimelineClock.cs" />
     <Compile Include="../AnimSync/MusicAutoTakeover.cs" Link="MusicAutoTakeover.cs" />
     <Compile Include="../AnimSync/SoundCallOwnership.cs" Link="SoundCallOwnership.cs" />

@@ -86,6 +86,7 @@ public sealed partial class AnimSync : IDalamudPlugin {
 	public void Dispose() {
 		disposed = true;
 		Framework.Update -= Tick;
+		DisposeDrivenPoseSampling();
 		void CleanupPlayback() { ResetTimeline(); DisposeTimelineMusic(); }
 		if(Framework.IsInFrameworkUpdateThread) CleanupPlayback();
 		else if(!Framework.IsFrameworkUnloading) {
@@ -180,6 +181,7 @@ public sealed partial class AnimSync : IDalamudPlugin {
 		if(audioSettingsSaveAt != 0 && Environment.TickCount64 >= audioSettingsSaveAt) Save();
 		ProcessTimeline();
 		ProcessTimelineMusic();
+		PublishDrivenPoseSamples();
 		if(positionRequested) { positionRequested = false; positionAlignment.Request(); }
 		positionAlignment.Update();
 		var now = DateTime.UtcNow;

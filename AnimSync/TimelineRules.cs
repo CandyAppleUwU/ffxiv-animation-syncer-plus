@@ -15,5 +15,11 @@ internal static class TimelineRules {
         Math.Abs(self.Duration - other.Duration) < 0.001f &&
         Vector3.DistanceSquared(self.Position, other.Position) <= distance * distance;
     public static float PlaySpeed(float original) => original != 0 && float.IsFinite(original) ? MathF.Abs(original) : 1;
+    public static float HoldTime(float time, float duration) => Math.Clamp(time, 0, MathF.BitDecrement(duration));
+    public static float DrivenLayerTime(float time, float duration) => HoldTime(time > duration ? time % duration : time, duration);
+    public static double AdvanceLoop(double time, double delta, float duration) {
+        var phase = (time + delta) % duration;
+        return phase < 0 ? phase + duration : phase;
+    }
     public static bool CanRestore(float current, float applied) => current == applied;
 }

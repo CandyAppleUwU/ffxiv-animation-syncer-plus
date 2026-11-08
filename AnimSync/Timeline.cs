@@ -28,6 +28,9 @@ public sealed partial class AnimSync {
         public string timelineStatus = "Waiting for a loaded animation.";
         public (long Epoch, int? Frame, bool Play)? timelineRequest;
         public int SpeedPercent = 100;
+        public float? PausedAt;
+        public (double Time, long Tick)? PropSpeedClock;
+        public long? PropControlGapSince;
         public bool MusicLinkWanted = true;
         public TimelineTrack(int key, string name, (ulong, nint, uint, bool)? source = null) { Key = key; Name = name; Source = source; }
     }
@@ -44,7 +47,10 @@ public sealed partial class AnimSync {
     private bool TimelineOwns(ulong id, nint address) => AllTimelines().Any(t => t.timelineActors.Any(a => a.Id == id && a.Address == address));
     private bool ClaimedByEarlierTrack(TimelineTrack track, IGameObject actor) => AllTimelines().TakeWhile(t => t != track).Any(t => t.Scope.Contains(actor.Address));
     private void ResetTimeline() {
-        foreach(var track in AllTimelines()) ResetTrack(track);
+        foreach(var track in AllTimelines()) {
+            ResetTrack(track);
+            track.PausedAt = null;
+        }
         timelineAddCandidate = timelineAddRequest = null;
     }
     private IGameObject? TrackSource(TimelineTrack track) {
@@ -66,13 +72,16 @@ public sealed partial class AnimSync {
                 visible.Add(sample with { Id = (ulong)actor.Address });
         var claimed = new HashSet<ulong>();
         foreach(var track in AllTimelines()) {
-            track.Scope.Clear();
             var source = TrackSource(track);
             if(source != null && AnimationSampling.TryReadTimeline(source, out var sample, out _)) {
+                track.Scope.Clear();
                 var group = TimelineGroups.Select(sample with { Id = (ulong)source.Address }, visible, config.Distance, claimed);
                 foreach(var id in group) track.Scope.Add((nint)id);
                 claimed.UnionWith(group);
-            }
+            } else if(source != null && CanBridgePropGap(track, source)) {
+                track.Scope.RemoveWhere(address => claimed.Contains((ulong)address));
+                claimed.UnionWith(track.Scope.Select(address => (ulong)address));
+            } else track.Scope.Clear();
         }
         // An added anchor joining an earlier group no longer needs a separate timeline.
         foreach(var track in extraTimelines.ToArray())
@@ -138,17 +147,25 @@ public sealed partial class AnimSync {
         }
         track.timelineActors.Clear();
     }
-    private void ResetTrack(TimelineTrack track) {
-        if(musicControls.TryGetValue(track.Key, out var music)) music.Link = null;
+    private void ResetTrack(TimelineTrack track, bool keepLink = false) {
+        if(!keepLink && musicControls.TryGetValue(track.Key, out var music) && music.Link is { } link) {
+            if(!link.Playing) track.PausedAt = (float)link.AnimationTime;
+            music.Link = null;
+        }
         track.timelineScrub.Cancel();
         track.Repeat.Cancel();
         ReleaseTrack(track);
         track.timelineIdentity = null;
         track.timelineRequest = null;
         track.timelineView = null;
-        track.SpeedPercent = 100;
+        track.PropControlGapSince = null;
+        if(!keepLink) track.PropSpeedClock = null;
         track.timelineEpoch++;
     }
+    private bool CanBridgePropGap(TimelineTrack track, IGameObject actor) => track.PropSpeedClock.HasValue &&
+        track.timelineIdentity is { } previous && previous.Actor == actor.Address &&
+        previous.Territory == Client.TerritoryType && previous.Gpose == Client.IsGPosing;
+
     private unsafe void ProcessTrack(TimelineTrack track, IGameObject? self) {
         if(!TimelineAvailable) {
             ResetTrack(track); return;
@@ -160,52 +177,91 @@ public sealed partial class AnimSync {
             return;
         }
         if(!AnimationSampling.TryReadTimeline(self, out var sample, out var reason)) {
+            if(CanBridgePropGap(track, self)) {
+                var gapNow = Environment.TickCount64;
+                track.PropControlGapSince ??= gapNow;
+                // A loop can retire the old controller one update before the new one is ready.
+                if(gapNow - track.PropControlGapSince.Value < 150) return;
+            }
             ResetTrack(track);
             track.timelineStatus = reason;
             return;
         }
+        track.PropControlGapSince = null;
         var body = ((Actor*)self.Address)->Control;
         var key = AnimationSampling.TimelineKey((FFXIVClientStructs.FFXIV.Client.Game.Character.Character*)self.Address, ResolveTimelineKey);
         var wasLinkedPlaying = musicControls.TryGetValue(track.Key, out var music) && music.Link?.Playing == true;
         var identity = (self.Address, (nint)body, (nint)body->hkaAnimationControl.Binding.ptr->Animation.ptr,
             Client.TerritoryType, Client.IsGPosing, key);
-        if(track.timelineIdentity != identity) { ResetTrack(track); track.timelineIdentity = identity; }
+        var continuing = false;
+        var reattachProps = false;
+        if(track.timelineIdentity != identity) {
+            // Some emote loops replace the Havok controller even though the action is still running.
+            var sameAction = track.timelineIdentity is { } prior && prior.Actor == self.Address &&
+                prior.Territory == Client.TerritoryType && prior.Gpose == Client.IsGPosing &&
+                !string.IsNullOrEmpty(key) && prior.Key == key && track.timelineView is { } previous &&
+                previous.Count == sample.FrameCount && Math.Abs(previous.Duration - sample.Duration) < .001f;
+            continuing = sameAction && track.timelineView?.Playing == true;
+            reattachProps = continuing && track.timelineActors.Any(playback => playback.HasProps);
+            var pending = track.timelineRequest;
+            ResetTrack(track, keepLink: sameAction);
+            track.timelineIdentity = identity;
+            if(pending is { } savedRequest && (sameAction || track.PausedAt.HasValue))
+                track.timelineRequest = (track.timelineEpoch, savedRequest.Frame, savedRequest.Play);
+        }
 
         // A manual reset takes priority and releases a paused animation before restarting it.
-        if(restartRequested || bodyRequested || nearYouRequested || nearbyRequested || targetSyncRequest.HasValue) {
+        var restarting = restartRequested || bodyRequested || nearYouRequested || nearbyRequested || targetSyncRequest.HasValue;
+        if(restarting) {
             if(musicControls.TryGetValue(track.Key, out var linkedMusic)) linkedMusic.Link = null;
             track.timelineScrub.Cancel();
             track.Repeat.Cancel();
             ReleaseTrack(track); track.timelineRequest = null;
-            track.SpeedPercent = 100;
+            track.PausedAt = null;
+            track.PropSpeedClock = null;
         }
         var multiplier = track.SpeedPercent / 100f;
+        var linked = music?.Link != null;
         var groupRate = track.timelineActors.FirstOrDefault()?.PlayRate ?? 1;
+        var now = Environment.TickCount64;
+        if(track.PropSpeedClock is { } clock && track.timelineRequest == null)
+            track.PropSpeedClock = (TimelineRules.AdvanceLoop(clock.Time, (now - clock.Tick) / 1000d * groupRate * multiplier, sample.Duration), now);
         foreach(var saved in track.timelineActors.ToArray()) {
             var actor = Objects.FirstOrDefault(saved.IsSameActor);
+            AnimationSample other = default;
             var valid = actor != null && IsManualPlayer(actor) &&
-                AnimationSampling.TryReadTimeline(actor, out var other, out _) && saved.Valid(actor, other) &&
+                AnimationSampling.TryReadTimeline(actor, out other, out _) && saved.Valid(actor, other) &&
                 (actor.Address == self.Address || TimelineRules.Matches(sample, other, config.Distance)) && !ClaimedByEarlierTrack(track, actor);
             if(valid) {
                 if(saved.PausedAt is { } pausedAt) {
                     saved.HoldPause(CanSyncSound(actor!));
                     if(saved.Address == self.Address) sample = sample with { LocalTime = pausedAt, Speed = 0 };
-                } else if(multiplier != 1 && track.timelineRequest == null) {
-                    saved.HoldSpeed(groupRate, multiplier, CanSyncSound(actor!));
-                    if(saved.Address == self.Address) sample = sample with { Speed = groupRate * multiplier };
+                } else if(!linked && track.PropSpeedClock is { } driven && track.timelineRequest == null) {
+                    saved.ApplyDriven((float)driven.Time, Math.Max(0, multiplier), CanSyncSound(actor!), loopLayers: true);
+                    if(saved.Address == self.Address) sample = sample with { LocalTime = (float)driven.Time, Speed = groupRate * multiplier };
+                } else if(!linked && (multiplier != 1 || saved.HasProps) && track.timelineRequest == null) {
+                    saved.HoldSpeed(groupRate, multiplier, CanSyncSound(actor!), other.LocalTime);
+                    if(multiplier != 1 && saved.Address == self.Address) sample = sample with { Speed = groupRate * multiplier };
                 }
                 continue;
             }
             if(actor != null) saved.Release(actor);
             track.timelineActors.Remove(saved);
-            if(saved.Address == self.Address) { ResetTrack(track); track.timelineIdentity = identity; break; }
+            if(saved.Address == self.Address) {
+                ResetTrack(track, keepLink: track.PropSpeedClock.HasValue);
+                track.timelineIdentity = identity;
+                break;
+            }
         }
-        var playing = music?.Link?.Playing ?? (sample.Speed != 0 || wasLinkedPlaying);
+        var playing = music?.Link?.Playing ?? (track.PropSpeedClock.HasValue || sample.Speed != 0 || wasLinkedPlaying || continuing);
+        // A new clip or an unlink releases the old native controls, but keeps the selected speed for this row.
+        if(!restarting && music?.Link == null && track.timelineActors.Count == 0) {
+            if(track.PausedAt.HasValue) track.timelineRequest ??= (track.timelineEpoch, null, false);
+            else if(playing && (multiplier != 1 || reattachProps || track.PropSpeedClock.HasValue)) track.timelineRequest ??= (track.timelineEpoch, null, true);
+        }
         if(track.timelineRequest is { } request) {
             track.timelineRequest = null;
             if(request.Epoch == track.timelineEpoch) {
-                // Restore old speeds before taking a fresh snapshot, including changes to scope.
-                ReleaseTrack(track);
                 var targets = new List<(IGameObject Actor, AnimationSample Sample)> { (self, sample) };
                 foreach(var actor in Objects) {
                     if(actor.Address == self.Address || !IsManualPlayer(actor) ||
@@ -213,14 +269,31 @@ public sealed partial class AnimSync {
                         !TimelineRules.Matches(sample, other, config.Distance) || ClaimedByEarlierTrack(track, actor)) continue;
                     targets.Add((actor, other));
                 }
-                foreach(var target in targets) track.timelineActors.Add(new TimelinePlayback(target.Actor, target.Sample));
+                // A speed-only change can keep the existing controls and their original speed snapshots.
+                var reuse = request.Frame == null && targets.Count == track.timelineActors.Count &&
+                    targets.Select((target, index) => track.timelineActors[index].Valid(target.Actor, target.Sample)).All(valid => valid);
+                if(!reuse) {
+                    ReleaseTrack(track);
+                    foreach(var target in targets)
+                        track.timelineActors.Add(new TimelinePlayback(target.Actor, target.Sample, FindTimelinePropModels(target.Actor)));
+                }
                 var rate = track.timelineActors[0].PlayRate;
-                var time = request.Frame is { } frame ? TimelineRules.TimeAtFrame(frame, sample.FrameCount, sample.Duration) : sample.LocalTime;
+                float? time = request.Frame is { } frame ? TimelineRules.TimeAtFrame(frame, sample.FrameCount, sample.Duration) :
+                    request.Play ? null : Math.Clamp(track.PausedAt ?? sample.LocalTime, 0, sample.Duration);
+                track.PausedAt = request.Play ? null : time;
                 multiplier = track.SpeedPercent / 100f;
-                for(var i = 0; i < targets.Count; i++)
-                    track.timelineActors[i].Apply(time, request.Play, rate, multiplier, CanSyncSound(targets[i].Actor));
+                var position = time ?? (float)(track.PropSpeedClock?.Time ?? sample.LocalTime);
+                var driveProps = request.Play && track.timelineActors.Any(playback => playback.HasProps);
+                var wasDriven = track.PropSpeedClock.HasValue;
+                track.PropSpeedClock = driveProps ? (position, now) : null;
+                for(var i = 0; i < targets.Count; i++) {
+                    var playback = track.timelineActors[i];
+                    var syncCues = CanSyncSound(targets[i].Actor);
+                    if(driveProps) playback.ApplyDriven(position, Math.Max(0, multiplier), syncCues, loopLayers: true);
+                    else playback.Apply(wasDriven ? position : time, targets[i].Sample.LocalTime, request.Play, rate, multiplier, syncCues);
+                }
                 // Display the applied position now; normal samples update it on following ticks.
-                sample = sample with { LocalTime = time, Speed = request.Play ? rate * multiplier : 0 };
+                sample = sample with { LocalTime = position, Speed = request.Play ? rate * multiplier : 0 };
                 playing = request.Play;
             }
         }

@@ -9,10 +9,11 @@ namespace AnimSync;
 public sealed partial class AnimSync {
     private bool MusicDrivesAnimation(TimelineTrack track) => musicControls.TryGetValue(track.Key, out var c) && c.Link?.MusicMaster == true;
     private void UnlinkMusicTimeline(LocalMusicControl control) {
-        if(control.Link == null) return;
+        if(control.Link is not { } link) return;
         control.Link = null;
         var track = AllTimelines().FirstOrDefault(t => t.Key == control.Observation.Owner.Track);
         if(track != null) {
+            if(!link.Playing) track.PausedAt = (float)link.AnimationTime;
             track.timelineScrub.Cancel(); track.Repeat.Cancel(); track.timelineRequest = null;
             ReleaseTrack(track);
         }
@@ -27,15 +28,18 @@ public sealed partial class AnimSync {
     private void StartMusicTimelineLink(TimelineTrack track, LocalMusicControl control) {
         if(track?.timelineView is not { } view || track.timelineScrub.Active || track.timelineRequest != null || control.Dragging) return;
         track.timelineScrub.Cancel(); track.Repeat.Cancel(); track.timelineRequest = null;
-        track.SpeedPercent = 100;
         control.Dragging = false;
         var musicMaster = control.Player.Duration >= view.Duration;
-        control.Link = new(view.Duration, control.Player.Duration, musicMaster ? control.Player.Position : view.Time,
-            musicMaster ? control.Player.Playing : view.Playing, Environment.TickCount64);
+        var playing = !track.PausedAt.HasValue && (musicMaster ? control.Player.Playing : view.Playing);
+        var position = track.PausedAt ?? (musicMaster ? control.Player.Position : view.Time);
+        control.Link = new(view.Duration, control.Player.Duration, position,
+            playing, Environment.TickCount64);
+        track.PausedAt = null;
+        track.PropSpeedClock = null;
     }
     private void UpdateMusicTimelineLink(LocalMusicControl control) {
         var track = AllTimelines().FirstOrDefault(t => t.Key == control.Observation.Owner.Track);
-        if(control.Link == null && track?.MusicLinkWanted == true && Environment.TickCount64 >= control.LinkRetryAt)
+        if(control.Link == null && track is { MusicLinkWanted: true, SpeedPercent: 100 } && Environment.TickCount64 >= control.LinkRetryAt)
             StartMusicTimelineLink(track, control);
         if(control.Link is not { } link) return;
         var source = track == null ? null : TrackSource(track);
@@ -49,8 +53,8 @@ public sealed partial class AnimSync {
                 !AnimationSampling.TryReadTimeline(actor, out var other, out _) ||
                 actor.Address != source.Address && !TimelineRules.Matches(sample, other, config.Distance)) continue;
             var playback = track.timelineActors.FirstOrDefault(p => p.IsActor(actor));
-            if(playback == null) { playback = new TimelinePlayback(actor, other); track.timelineActors.Add(playback); }
-            if(playback.Valid(actor, other)) playback.ApplyLinked((float)link.AnimationTime, link.Playing, CanSyncSound(actor));
+            if(playback == null) { playback = new TimelinePlayback(actor, other, FindTimelinePropModels(actor)); track.timelineActors.Add(playback); }
+            if(playback.Valid(actor, other)) playback.ApplyDriven((float)link.AnimationTime, link.Playing ? 1 : 0, CanSyncSound(actor));
         }
         // Keep the song running normally; only flush/seek on user actions or meaningful drift.
         if(!link.Playing && control.Player.Playing) control.Player.Pause();

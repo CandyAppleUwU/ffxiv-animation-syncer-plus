@@ -10,6 +10,16 @@ static void Check(bool condition, string name) {
 }
 static List<List<AnimationSample>> Groups(params AnimationSample[] players) => NearbyGroups.Find(players, 0.6f);
 
+var propTimeline = new byte[12 + 0x28];
+"TMLB"u8.CopyTo(propTimeline);
+System.Buffers.Binary.BinaryPrimitives.WriteInt32LittleEndian(propTimeline.AsSpan(4), propTimeline.Length);
+propTimeline[8] = 1;
+"C198"u8.CopyTo(propTimeline.AsSpan(12));
+propTimeline[16] = 0x28;
+System.Buffers.Binary.BinaryPrimitives.WriteUInt16LittleEndian(propTimeline.AsSpan(12 + 0x20), 1920);
+Check(TmbPropModels.Read(propTimeline).SetEquals(new ushort[] { 1920 }), "Timeline props use the model ID from the Lemure spawn entry");
+Check(TmbPropModels.Read(propTimeline.AsSpan(0, propTimeline.Length - 1)).Count == 0, "Truncated prop timelines cannot claim models");
+
 var quantizedHeader = new byte[ClipFrames.QuantizedHeaderSize];
 System.Buffers.Binary.BinaryPrimitives.WriteUInt16LittleEndian(quantizedHeader, 40);
 System.Buffers.Binary.BinaryPrimitives.WriteUInt16LittleEndian(quantizedHeader.AsSpan(6), 257);
@@ -153,6 +163,12 @@ Check(!TimelineRules.Matches(Player(1, 0, 10), Player(2, .1f, 20), float.NaN), "
 Check(TimelineRules.PlaySpeed(2) == 2 && TimelineRules.PlaySpeed(-2) == 2 && TimelineRules.PlaySpeed(0) == 1,
     "Play keeps the original speed magnitude and uses the slider to choose direction");
 Check(TimelineRules.CanRestore(0, 0), "Timeline restores playback speeds that it paused");
+Check(TimelineRules.HoldTime(2, 2) < 2 && TimelineRules.HoldTime(1, 2) == 1,
+    "Holding the last frame samples just inside the clip endpoint");
+Check(TimelineRules.AdvanceLoop(1.75, .5, 2) == .25 && TimelineRules.AdvanceLoop(.25, -.5, 2) == 1.75,
+    "Driven prop timelines wrap the full clip in both directions");
+Check(TimelineRules.DrivenLayerTime(2.5f, 1) == .5f && TimelineRules.DrivenLayerTime(1, 1) < 1,
+    "A shorter driven layer wraps instead of holding the end pose for the rest of the main clip");
 Check(!TimelineRules.CanRestore(2, 0), "Timeline release preserves newer speed changes from other tools");
 
 var scrub = new TimelineScrubState();
