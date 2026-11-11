@@ -119,6 +119,52 @@ Check(PositionRules.Closest(Vector3.Zero, 1, new[] { positionCandidates[0] }) ==
 Check(PositionRules.Closest(Vector3.Zero, 1, new[] { new PositionCandidate(2, new(0.6f, 0, 0)) }) == null, "No candidate in range means no alignment");
 Check(PositionRules.Closest(Vector3.Zero, 1, new[] { new PositionCandidate(4, new(0.2f, 0, 0)), positionCandidates[2] }) == 3, "Nearest-player ties are deterministic");
 Check(Math.Abs(PositionRules.AngleDelta(MathF.PI - 0.0001f, -MathF.PI + 0.0001f)) < 0.001f, "Facing comparison handles angle wraparound");
+Check(Vector3.Distance(PositionRules.LocalOffset(new Vector3(2, 3, 4), new Vector3(3, 5, 4), MathF.PI / 2), new Vector3(0, 2, 1)) < .0001f,
+    "Bone alignment converts the world position difference into SimpleHeels local axes");
+Check(PositionRules.TryParseBlenderOffset("AnimSyncAlign j_kao iv_ochinko_f 0.0067 0.0501 0.0301", out var blenderOffset) &&
+    Vector3.Distance(blenderOffset, new Vector3(0.0067f, 0.0501f, 0.0301f)) < 1e-6f, "Bone alignment reads the head offset line copied from Blender");
+Check(PositionRules.TryParseBlenderOffset("0.1, -0.2, 0.3", out var plainOffset) && plainOffset == new Vector3(0.1f, -0.2f, 0.3f), "Bone alignment accepts three plain numbers");
+Check(!PositionRules.TryParseBlenderOffset("AnimSyncAlign j_kao 0.1 0.2", out _) && !PositionRules.TryParseBlenderOffset("", out _) &&
+    !PositionRules.TryParseBlenderOffset("1 2 NaN", out _) && !PositionRules.TryParseBlenderOffset("10 0 0", out _), "Bone alignment rejects incomplete, invalid or huge offsets");
+Check(Vector3.Distance(PositionRules.AlignTarget(new Vector3(1, 2, 3), new Vector3(0, 0.05f, 0.1f), Quaternion.CreateFromAxisAngle(Vector3.UnitY, MathF.PI / 2)),
+    new Vector3(1.1f, 2.05f, 3)) < 1e-5f, "Bone alignment turns the Blender offset with the partner's facing");
+Check(PositionRules.TryParseBlenderAlign("AnimSyncAlign j_f_ulip_01_l+j_f_ulip_01_r+j_f_dlip_01_l+j_f_dlip_01_r iv_ochinko_d 0.001 -0.002 0.003", out var alignBones, out var alignPartner, out var alignOffset) &&
+    alignBones.Length == 4 && alignBones[3] == "j_f_dlip_01_r" && alignPartner == "iv_ochinko_d" && alignOffset == new Vector3(0.001f, -0.002f, 0.003f),
+    "Bone alignment reads the chosen bones from the Blender line");
+Check(PositionRules.TryParseBlenderAlign("0.1 0.2 0.3", out var defaultBones, out var defaultPartner, out _) && defaultBones.Single() == "j_kao" && defaultPartner == "iv_ochinko_f",
+    "Bone alignment keeps the head and tip when the line names no bones");
+Check(PositionRules.SimpleHeelsAddCommand(new Vector3(-0.0123f, 0.05f, 0.1f)) == "/heels temp add height 0.05 forward 0.1 left -0.0123 silent",
+    "Bone alignment builds the SimpleHeels add command with its axes and invariant numbers");
+Check(BoneAlignPresets.BuiltIn.Single(p => p.Name == "Blow Job").Line.EndsWith("iv_ochinko_f -0.00447 -0.01078 -0.00143") &&
+    PositionRules.TryParseBlenderAlign(BoneAlignPresets.BuiltIn[0].Line, out var presetBones, out _, out _) && presetBones.Length == 4, "The Blow Job preset is built in and parses");
+Check(BoneAlignPresets.SimpleHeelsSetCommand(new Vector3(-0.01f, 0.02f, 0.03f), -12.5f) == "/heels temp set height 0.02 forward 0.03 left -0.01 rotate -12.5 silent",
+    "Manual controls set the whole SimpleHeels temp offset including rotation");
+Check(BoneAlignPresets.ShouldSend(true, 1.0, 0.85) && !BoneAlignPresets.ShouldSend(true, 1.0, 0.95) && !BoneAlignPresets.ShouldSend(false, 5, 0),
+    "Live SimpleHeels updates are throttled and only sent when something changed");
+Check(BoneAlignPresets.LooksKey(1, 0, 1, 50, 2) != BoneAlignPresets.LooksKey(1, 1, 1, 50, 2) &&
+    BoneAlignPresets.LooksKey(1, 0, 1, 50, 2) != BoneAlignPresets.LooksKey(1, 0, 1, 51, 2) &&
+    BoneAlignPresets.LooksKey(1, 0, 1, 50, 2) != BoneAlignPresets.LooksKey(2, 0, 1, 50, 2) &&
+    BoneAlignPresets.LooksKey(1, 0, 1, 50, 2) == BoneAlignPresets.LooksKey(1, 0, 1, 50, 2), "Bone Align notices gender, height and race changes");
+Check(BoneAlignPresets.SimpleHeelsSetCommand(Vector3.Zero, 0) == "/heels temp set height 0 forward 0 left 0 rotate 0 silent",
+    "Bone Align zeroes SimpleHeels before measuring");
+Check(!BoneAlignPresets.Settled(null, Vector3.Zero) && BoneAlignPresets.Settled(new Vector3(0.0003f, 0, 0), Vector3.Zero) &&
+    !BoneAlignPresets.Settled(new Vector3(0.002f, 0, 0), Vector3.Zero), "Bone Align only measures once the pose has stopped changing");
+Check(BoneAlignPresets.ModelKey(5, 100, 200, 10000) != BoneAlignPresets.ModelKey(5, 101, 200, 10000) &&
+    BoneAlignPresets.ModelKey(5, 100, 200, 10000) != BoneAlignPresets.ModelKey(5, 100, 200, 10500) &&
+    BoneAlignPresets.ModelKey(5, 100, 200, 10000) == BoneAlignPresets.ModelKey(5, 100, 200, 10000), "Bone Align waits for the redrawn model, not just the new settings");
+Check(PositionRules.TryParseBlenderAlign("AnimSyncAlign j_kao iv_ochinko_f 0.01 0.02 0.03 -15.5", out _, out _, out var yawOffset, out var yawDegrees) &&
+    yawOffset == new Vector3(0.01f, 0.02f, 0.03f) && yawDegrees == -15.5f, "Bone Align reads an optional facing angle from the Blender line");
+Check(PositionRules.TryParseBlenderAlign(BoneAlignPresets.BuiltIn[0].Line, out _, out _, out _, out var presetYaw) && presetYaw == 0 &&
+    !PositionRules.TryParseBlenderOffset("1 2 3 4 5", out _), "Lines without an angle face the same way; extra numbers are rejected");
+Check(BoneAlignPresets.WrapDegrees(190) == -170 && BoneAlignPresets.WrapDegrees(-190) == 170 && BoneAlignPresets.WrapDegrees(45) == 45,
+    "Bone Align keeps its rotation between -180 and 180 degrees");
+Check(PositionRules.TryParseBlenderAlign(BoneAlignPresets.BuiltIn.Single(p => p.Name == "Ass").Line, out var testBones, out var testPartner, out var testOffset) &&
+    testBones.Single() == "iv_koumon" && testPartner == "iv_ochinko_d" && testOffset == Vector3.Zero, "The Ass preset puts iv_koumon right on iv_ochinko_d");
+Check(PositionRules.TryParseBlenderAlign(BoneAlignPresets.BuiltIn.Single(p => p.Name == "Pussy").Line, out var pussyBones, out var pussyPartner, out var pussyOffset) &&
+    pussyBones.Single() == "iv_ochinko_d" && pussyPartner == "iv_omanko" && pussyOffset == Vector3.Zero, "The Pussy preset puts iv_ochinko_d right on iv_omanko");
+Check(Vector3.Distance(PositionRules.ReverseAlignTarget(new Vector3(1, 2, 3), new Vector3(0, 0.05f, 0.1f), MathF.PI / 2), new Vector3(0.9f, 1.95f, 3)) < 1e-5f &&
+    Vector3.Distance(PositionRules.AlignTarget(PositionRules.ReverseAlignTarget(new Vector3(1, 2, 3), new Vector3(0.02f, 0.05f, 0.1f), 0.7f), new Vector3(0.02f, 0.05f, 0.1f),
+        Quaternion.CreateFromAxisAngle(Vector3.UnitY, 0.7f)), new Vector3(1, 2, 3)) < 1e-5f, "Reverse align is the exact opposite of normal align");
 
 Check(TimeSyncRules.Matches("Match anim with me c:", "Match anim with me c:"), "Shared phrases match exactly");
 Check(TimeSyncRules.Matches("  shared phrase ", "shared phrase"), "Outer whitespace is ignored");

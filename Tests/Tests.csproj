@@ -38,5 +38,6 @@
     <Compile Include="../AnimSync/AnimationExclusions.cs" Link="AnimationExclusions.cs" />
     <Compile Include="../AnimSync/SoundSyncPolicy.cs" Link="SoundSyncPolicy.cs" />
     <Compile Include="../AnimSync/PositionRules.cs" Link="PositionRules.cs" />
+    <Compile Include="../AnimSync/BoneAlignPresets.cs" Link="BoneAlignPresets.cs" />
   </ItemGroup>
 </Project>

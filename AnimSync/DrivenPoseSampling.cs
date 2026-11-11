@@ -15,6 +15,16 @@ public sealed partial class AnimSync {
         Dictionary<DrivenPoseKey, float>? samples = null;
         var awaitingControl = false;
         if(!drivenPoseHookFailed) {
+            if(boneAlignSession is { } pair) {
+                samples = new();
+                pair.Self?.AddDrivenPoseSamples(samples, pair.Self.PausedAt ?? BoneAlignTime, loopLayers: false);
+                pair.Partner?.AddDrivenPoseSamples(samples, pair.Partner.PausedAt ?? BoneAlignTime, loopLayers: false);
+            }
+            if(alignPlayer is { } player && alignPlayerPaused && player.Self.PausedAt is { } heldAt) {
+                samples ??= new();
+                player.Self.AddDrivenPoseSamples(samples, heldAt, loopLayers: false);
+                player.Partner.AddDrivenPoseSamples(samples, heldAt, loopLayers: false);
+            }
             foreach(var track in AllTimelines()) {
                 if(track.timelineView == null || !track.timelineActors.Exists(playback => playback.HasProps)) continue;
                 var clock = track.PropSpeedClock;

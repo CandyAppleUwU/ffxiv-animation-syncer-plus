@@ -72,6 +72,8 @@ public sealed partial class AnimSync : IDalamudPlugin {
 		windows.AddWindow(settingsWindow);
 		timelineWindow = new TimelineWindow(this);
 		windows.AddWindow(timelineWindow);
+		boneAlignWindow = new BoneAlignWindow(this);
+		windows.AddWindow(boneAlignWindow);
 		Interface.UiBuilder.DisableGposeUiHide = true;
 		Interface.UiBuilder.DisableCutsceneUiHide = true;
 		Interface.UiBuilder.Draw += windows.Draw;
@@ -80,14 +82,14 @@ public sealed partial class AnimSync : IDalamudPlugin {
 		Framework.Update += Tick;
 		Chat.ChatMessage += OnTimeSyncChat;
 		Commands.AddHandler("/animsync", new CommandInfo(OnCommand) {
-			HelpMessage = "'ui'/'settings': menu; 'timeline': animation player; 'groups': sync groups; 'everyone': sync everyone; 'near': sync near you; 'target': sync you and target; 'pos'/'align': match position/facing within 0.5y; 'toggle': auto sync; 'body': body reset.",
+			HelpMessage = "'ui'/'settings': menu; 'timeline': animation player; 'bonealign': bone alignment test; 'groups': sync groups; 'everyone': sync everyone; 'near': sync near you; 'target': sync you and target; 'pos'/'align': match position/facing within 0.5y; 'toggle': auto sync; 'body': body reset.",
 		});
 	}
 	public void Dispose() {
 		disposed = true;
 		Framework.Update -= Tick;
 		DisposeDrivenPoseSampling();
-		void CleanupPlayback() { ResetTimeline(); DisposeTimelineMusic(); }
+		void CleanupPlayback() { ReleaseBoneAlign(); ReleaseAlignPlayer(); ResetTimeline(); DisposeTimelineMusic(); }
 		if(Framework.IsInFrameworkUpdateThread) CleanupPlayback();
 		else if(!Framework.IsFrameworkUnloading) {
 			try { Framework.RunOnFrameworkThread(CleanupPlayback).GetAwaiter().GetResult(); }
@@ -172,21 +174,23 @@ public sealed partial class AnimSync : IDalamudPlugin {
 				break;
 			case "ui": case "settings": settingsWindow.IsOpen = !settingsWindow.IsOpen; break;
 			case "timeline": timelineWindow.IsOpen = !timelineWindow.IsOpen; break;
+			case "bonealign": boneAlignWindow.IsOpen = !boneAlignWindow.IsOpen; break;
 			case "toggle": config.Enabled = !config.Enabled; Save(); break;
-			default: Chat.Print("Usage: /animsync [ui|settings|timeline|groups|everyone|near|target|pos|align|toggle|body]"); break;
+			default: Chat.Print("Usage: /animsync [ui|settings|timeline|bonealign|groups|everyone|near|target|pos|align|toggle|body]"); break;
 		}
 	}
 	private unsafe void Tick(IFramework framework) {
 		if(disposed) return;
 		if(audioSettingsSaveAt != 0 && Environment.TickCount64 >= audioSettingsSaveAt) Save();
+		ProcessBoneAlign();
 		ProcessTimeline();
 		ProcessTimelineMusic();
-		PublishDrivenPoseSamples();
 		if(positionRequested) { positionRequested = false; positionAlignment.Request(); }
 		positionAlignment.Update();
 		var now = DateTime.UtcNow;
 		var paused = IsAutomaticSyncPaused;
 		ProcessTimeSync(now);
+		PublishDrivenPoseSamples();
 		ProcessRedrawRecovery(now, paused);
 		if(targetSyncRequest is { } requested) {
 			targetSyncRequest = null;
@@ -373,9 +377,13 @@ public sealed partial class AnimSync : IDalamudPlugin {
 		public float[] MusicEqualizerGains = new float[MusicEqualizer.Frequencies.Length];
 		public float MusicReverbAmount;
 		public float? TimelineMusicVolume;
+		public string BoneAlignBlenderOffset = string.Empty;
+		public bool BoneAlignAuto = true;
+		public bool BoneAlignReverse;
 		public void Normalize() {
 			Version = 6;
 			TimeSyncPhrase ??= string.Empty;
+			BoneAlignBlenderOffset ??= string.Empty;
 			DjPlayers ??= new();
 			MusicEqualizerGains = MusicEqualizer.Normalize(MusicEqualizerGains);
 			MusicReverbAmount = MusicVolume.Clamp(MusicReverbAmount);
@@ -467,6 +475,8 @@ public sealed partial class AnimSync : IDalamudPlugin {
 			if(ImGui.Button("Sync Position")) plugin.positionRequested = true;
 			ButtonHelp("Sync Position", positionBlock ?? "Matches your position and facing to your target within 0.5 yalms. With no target, uses the closest player within 0.5 yalms.");
 			ImGui.EndDisabled();
+			ImGui.SameLine();
+			if(ImGui.Button("Bone Align")) plugin.boneAlignWindow.IsOpen = !plugin.boneAlignWindow.IsOpen;
 			changed |= ImGui.Checkbox("Perfect Frame Sync", ref c.MatchLeadingPlayer);
 			ImGui.SameLine();
 			ImGui.TextColored(new Vector4(1f, 0.25f, 0.25f, 1f), "(Experimental)");

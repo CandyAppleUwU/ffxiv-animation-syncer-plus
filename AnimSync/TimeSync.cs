@@ -98,6 +98,7 @@ public sealed partial class AnimSync {
         if(clock < job.Due) return;
         timeJob = null;
         // An explicit shared-phrase restart takes priority over timeline playback.
+        if(job.Actors.Any(identity => BoneAlignOwns(identity.Id, identity.Address))) ReleaseBoneAlign();
         if(job.Actors.Any(identity => TimelineOwns(identity.Id, identity.Address))) ResetTimeline();
         foreach(var identity in job.Actors) {
             var actor = Objects.OfType<IPlayerCharacter>().FirstOrDefault(p => p.GameObjectId == identity.Id && p.Address == identity.Address && p.ObjectIndex < 200);

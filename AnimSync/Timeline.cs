@@ -43,7 +43,8 @@ public sealed partial class AnimSync {
     private bool TimelineAvailable => timelineWindow.IsOpen && Client.IsLoggedIn &&
         !Conditions[ConditionFlag.BetweenAreas] && !Conditions[ConditionFlag.BetweenAreas51];
     private IEnumerable<TimelineTrack> AllTimelines() => new[] { primaryTimeline }.Concat(extraTimelines);
-    private bool TimelineOwns(IGameObject actor) => timelineWindow.IsOpen && AllTimelines().Any(t => t.timelineActors.Any(a => a.IsActor(actor)));
+    private bool TimelineOwns(IGameObject actor) => BoneAlignOwns(actor.GameObjectId, actor.Address) ||
+        timelineWindow.IsOpen && AllTimelines().Any(t => t.timelineActors.Any(a => a.IsActor(actor)));
     private bool TimelineOwns(ulong id, nint address) => AllTimelines().Any(t => t.timelineActors.Any(a => a.Id == id && a.Address == address));
     private bool ClaimedByEarlierTrack(TimelineTrack track, IGameObject actor) => AllTimelines().TakeWhile(t => t != track).Any(t => t.Scope.Contains(actor.Address));
     private void ResetTimeline() {
