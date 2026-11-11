@@ -26,6 +26,65 @@ public sealed partial class AnimSync {
         uint Territory, bool Gpose, string Name);
     private BoneAlignSession? boneAlignSession;
     private bool boneAlignRequested, boneAlignTargetRequested;
+    private ulong? boneAlignPickRequested;     // a GPose actor picked from the list
+    private ulong? alignPickId;
+    // GPose only: the character that gets moved (null = you).
+    private ulong? alignMoverId;
+
+    /// <summary>The character Bone Align moves: you, or in GPose the actor picked under "Move".</summary>
+    private IGameObject? AlignMover() {
+        if(!Client.IsGPosing || alignMoverId is not { } id) return ManualSelf();
+        return Objects.FirstOrDefault(o => o.GameObjectId == id && SyncScopeRules.IncludesPlayer(o.ObjectIndex, true));
+    }
+
+    // GPose: every moved character keeps its own alignment. The fields above always hold the
+    // character picked under "Move"; the others are parked here while you work on another one.
+    private sealed record MoverState(Vector3? HeelsOffset, float HeelsRotation, Vector3 Auto, float AutoRotation,
+        Vector3 Tweak, float TweakRotation, ulong PartnerId, (long Self, long Partner) Looks, ushort? Animation,
+        bool ToTarget, ulong? PickId, (nint Address, Vector3 Position, float Rotation)? GposeBase,
+        (nint Address, Vector3 Position, Quaternion Rotation)? BrioBase, string Status);
+    private readonly System.Collections.Generic.Dictionary<ulong, MoverState> parkedMovers = new();
+
+    private MoverState CurrentMoverState() => new(heelsOffset, heelsRotation, alignAuto, alignAutoRotation, alignTweak,
+        alignTweakRotation, alignPartnerId, alignLooks, alignAnimation, alignToTarget, alignPickId, gposeBase, brioBase, boneAlignStatus);
+
+    private void LoadMoverState(MoverState? state) {
+        heelsOffset = state?.HeelsOffset; heelsRotation = state?.HeelsRotation ?? 0;
+        alignAuto = state?.Auto ?? Vector3.Zero; alignAutoRotation = state?.AutoRotation ?? 0;
+        alignTweak = state?.Tweak ?? Vector3.Zero; alignTweakRotation = state?.TweakRotation ?? 0;
+        alignPartnerId = state?.PartnerId ?? 0; alignLooks = state?.Looks ?? default; alignAnimation = state?.Animation;
+        alignToTarget = state?.ToTarget ?? false; alignPickId = state?.PickId;
+        gposeBase = state?.GposeBase; brioBase = state?.BrioBase;
+        heelsPending = false; alignLooksChangedAt = 0; alignAnimationMisses = 0;
+        boneAlignStatus = state?.Status ?? "Now pick who to align to.";
+    }
+
+    private bool IsMoverAligned(ulong? id) => id == alignMoverId ? heelsOffset != null : parkedMovers.ContainsKey(id ?? 0);
+
+    private void SetAlignMover(ulong? id) {
+        if(id == alignMoverId || BoneAlignBusy) return;
+        var key = alignMoverId ?? 0;
+        if(heelsOffset != null) parkedMovers[key] = CurrentMoverState();
+        else parkedMovers.Remove(key);
+        alignMoverId = id;
+        LoadMoverState(parkedMovers.TryGetValue(id ?? 0, out var saved) ? saved : null);
+        parkedMovers.Remove(id ?? 0);
+    }
+
+    /// <summary>Puts every moved GPose character back where it stood.</summary>
+    private void TurnOffAllMovers() {
+        var current = alignMoverId;
+        TurnOffBoneAlign();
+        foreach(var (key, state) in parkedMovers.ToArray()) {
+            alignMoverId = key == 0 ? null : key;
+            LoadMoverState(state);
+            TurnOffBoneAlign();
+        }
+        parkedMovers.Clear();
+        alignMoverId = current;
+        LoadMoverState(null);
+        boneAlignStatus = "All alignments turned off.";
+    }
     private string boneAlignStatus = "Pick a preset, then press Align.";
 
     // The running alignment job.
@@ -57,20 +116,69 @@ public sealed partial class AnimSync {
     private long alignLooksChangedAt;
     private long alignWatchAt;
     private (long Self, long Partner) alignPendingLooks;
+    // The animation you were playing when aligned; another one resets the offsets to 0.
+    private ushort? alignAnimation;
+    private int alignAnimationMisses;
+    private long alignAnimationCheckAt;
 
     private bool BoneAlignOwns(ulong id, nint address) => boneAlignSession is { } pair &&
         (pair.Self is { } own && own.Id == id && own.Address == address || pair.Partner is { } other && other.Id == id && other.Address == address);
 
     private bool BoneAlignBusy => alignStage != AlignStage.None;
 
-    private static bool SendHeelsCommand(Vector3 offset, float degrees) =>
-        Commands.ProcessCommand(BoneAlignPresets.SimpleHeelsSetCommand(offset, degrees));
+    // In GPose, SimpleHeels' /heels temp only changes your real (hidden) character, so the
+    // GPose copy is moved directly instead: where it stood when aligning started + the offset.
+    private (nint Address, Vector3 Position, float Rotation)? gposeBase;
+
+    private bool SendHeelsCommand(Vector3 offset, float degrees) =>
+        Client.IsGPosing ? MoveGposeActor(offset, degrees) : Commands.ProcessCommand(BoneAlignPresets.SimpleHeelsSetCommand(offset, degrees));
+
+    // With Brio installed, GPose characters are placed through Brio's own API
+    // (Brio.SetModelTransform.V3): Brio then holds the spot when the game resets it.
+    private (nint Address, Vector3 Position, Quaternion Rotation)? brioBase;
+
+    private bool TryBrioMove(IGameObject self, Vector3 offset, float degrees, float frameYaw) {
+        try {
+            if(brioBase is not { } start || start.Address != self.Address) {
+                var (position, rotation, _) = Interface.GetIpcSubscriber<IGameObject, (Vector3?, Quaternion?, Vector3?)>("Brio.GetModelTransform.V3").InvokeFunc(self);
+                if(position is not { } p || rotation is not { } r) return false;
+                start = (self.Address, p, r);
+                brioBase = start;
+            }
+            var world = start.Position + Vector3.Transform(offset, Quaternion.CreateFromAxisAngle(Vector3.UnitY, frameYaw));
+            var turned = Quaternion.Normalize(Quaternion.Concatenate(start.Rotation, Quaternion.CreateFromAxisAngle(Vector3.UnitY, degrees * MathF.PI / 180)));
+            return Interface.GetIpcSubscriber<IGameObject, Vector3?, Quaternion?, Vector3?, bool, bool>("Brio.SetModelTransform.V3")
+                .InvokeFunc(self, world, turned, null, false);
+        } catch(Exception ex) {
+            Logger.Debug(ex, "Brio isn't available for moving the GPose character.");
+            brioBase = null;
+            return false;
+        }
+    }
+
+    private unsafe bool MoveGposeActor(Vector3 offset, float degrees) {
+        var self = AlignMover();
+        if(self == null) return false;
+        if(gposeBase is not { } start || start.Address != self.Address) {
+            start = (self.Address, self.Position, self.Rotation);
+            gposeBase = start;
+        }
+        if(TryBrioMove(self, offset, degrees, start.Rotation)) return true;
+        // Move through the game's draw offset (what SimpleHeels uses too): it isn't reset in
+        // GPose, and SimpleHeels takes an outside draw offset as its base and adds its own on top.
+        var drawOffset = Vector3.Transform(offset, Quaternion.CreateFromAxisAngle(Vector3.UnitY, start.Rotation));
+        var native = (FFXIVClientStructs.FFXIV.Client.Game.Object.GameObject*)self.Address;
+        native->SetDrawOffset(drawOffset.X, drawOffset.Y, drawOffset.Z);
+        native->SetRotation(BoneAlignPresets.WrapDegrees((start.Rotation * 180 / MathF.PI) + degrees) * MathF.PI / 180);
+        return true;
+    }
 
     private void SendHeels(double now) {
         if(heelsOffset is not { } offset) return;
         heelsPending = false;
         heelsSentAt = now;
-        if(!SendHeelsCommand(offset, heelsRotation)) boneAlignStatus = "SimpleHeels is needed for Bone Align. Is it installed and enabled?";
+        if(!SendHeelsCommand(offset, heelsRotation))
+            boneAlignStatus = Client.IsGPosing ? "Your GPose character isn't ready." : "SimpleHeels is needed for Bone Align. Is it installed and enabled?";
     }
 
     /// <summary>The user's fine-tuning, added on top of the measured alignment.</summary>
@@ -88,7 +196,13 @@ public sealed partial class AnimSync {
         heelsPending = false;
         alignTweak = Vector3.Zero;
         alignTweakRotation = 0;
-        Commands.ProcessCommand(BoneAlignPresets.SimpleHeelsResetCommand);
+        if(Client.IsGPosing) {
+            MoveGposeActor(Vector3.Zero, 0);   // back to where you stood
+            gposeBase = null;
+            brioBase = null;
+        } else {
+            Commands.ProcessCommand(BoneAlignPresets.SimpleHeelsResetCommand);
+        }
         boneAlignStatus = "Alignment turned off.";
     }
 
@@ -111,7 +225,7 @@ public sealed partial class AnimSync {
     /// <summary>Starts an alignment. Automatic re-runs keep the user's fine-tuning.</summary>
     private bool alignToTarget;              // this alignment uses the target, whatever it is doing
 
-    private void BeginAlignJob(bool automatic, bool toTarget = false) {
+    private void BeginAlignJob(bool automatic, bool toTarget = false, ulong? pick = null) {
         if(!PositionRules.TryParseBlenderAlign(config.BoneAlignBlenderOffset, out _, out _, out _, out _)) {
             boneAlignStatus = "Pick a preset first.";
             return;
@@ -124,11 +238,14 @@ public sealed partial class AnimSync {
             alignTweakRotation = 0;
         }
         alignAutomatic = automatic;
-        if(!automatic) alignToTarget = toTarget;
+        if(!automatic) {
+            alignToTarget = toTarget;
+            alignPickId = pick;
+        }
         ReleaseAlignPlayer();
         // Measure from a clean SimpleHeels offset so nothing old is mixed into the result.
         if(!SendHeelsCommand(Vector3.Zero, 0)) {
-            boneAlignStatus = "SimpleHeels is needed for Bone Align. Is it installed and enabled?";
+            boneAlignStatus = Client.IsGPosing ? "Your GPose character isn't ready." : "SimpleHeels is needed for Bone Align. Is it installed and enabled?";
             return;
         }
         alignStage = AlignStage.Zeroing;
@@ -156,6 +273,13 @@ public sealed partial class AnimSync {
     }
 
     private void ProcessBoneAlign() {
+        if(!Client.IsGPosing && (alignMoverId != null || parkedMovers.Count > 0)) {
+            parkedMovers.Clear();
+            alignMoverId = null;
+            LoadMoverState(null);
+            boneAlignStatus = "Pick a preset, then press Align.";
+        }
+        if(!Client.IsGPosing) { gposeBase = null; brioBase = null; }
         var requested = boneAlignRequested;
         boneAlignRequested = false;
         if(timelineWindow.IsOpen || !Client.IsLoggedIn || Conditions[ConditionFlag.BetweenAreas] ||
@@ -169,8 +293,13 @@ public sealed partial class AnimSync {
         boneAlignTargetRequested = false;
         if(requested && !BoneAlignBusy) BeginAlignJob(false);
         else if(targetRequested && !BoneAlignBusy) BeginAlignJob(false, true);
+        if(boneAlignPickRequested is { } pickId) {
+            boneAlignPickRequested = null;
+            if(!BoneAlignBusy) BeginAlignJob(false, true, pickId);
+        }
         if(BoneAlignBusy) RunAlignJob();
         else {
+            if(heelsOffset != null) WatchAnimation();
             if(heelsOffset != null && config.BoneAlignAuto) WatchAppearance();
             if(boneAlignWindow.IsOpen && !BoneAlignBusy) ProcessAlignPlayer();
             else { ReleaseAlignPlayer(); alignPlayerAvailable = false; }
@@ -184,7 +313,7 @@ public sealed partial class AnimSync {
             return;
         }
         if(alignStage == AlignStage.Zeroing) {
-            if(alignToTarget) StartTargetAlign(alignAutomatic ? alignPartnerId : null);
+            if(alignToTarget) StartTargetAlign(alignAutomatic ? alignPartnerId : alignPickId);
             else StartBoneAlign();
             if(boneAlignSession == null) { FailAlignJob(boneAlignStatus); return; }
             alignStage = AlignStage.Measuring;
@@ -192,7 +321,7 @@ public sealed partial class AnimSync {
             return;
         }
         if(boneAlignSession is not { } pair) { FailAlignJob("Alignment was interrupted. Press Align to try again."); return; }
-        var self = ManualSelf();
+        var self = AlignMover();
         var partner = AlignPartnerObject(pair);
         if(self == null || partner == null || !HoldAlignPair()) {
             FailAlignJob("The other player moved away or changed animation. Press Align to try again.");
@@ -262,7 +391,8 @@ public sealed partial class AnimSync {
             }
         }
         var target = alignPoint;
-        var delta = PositionRules.LocalOffset(from, target, alignOffsetYaw ?? self.Rotation);
+        var offsetYaw = alignOffsetYaw ?? (Client.IsGPosing && gposeBase is { } start ? start.Rotation : self.Rotation);
+        var delta = PositionRules.LocalOffset(from, target, offsetYaw);
         Logger.Warning($"[BoneAlign] pass {alignPasses}: delta {delta} (|{delta.Length():0.0000}|), total {alignAuto + delta}, facing off by {rotationError:0.00} deg");
         if(delta.Length() > BoneAlignTolerance) {
             alignMoveSample = (delta, from);
@@ -276,6 +406,8 @@ public sealed partial class AnimSync {
         SendHeels(0);
         alignPartnerId = partner.GameObjectId;
         alignLooks = (Looks(self), Looks(partner));
+        alignAnimation = AnimationSampling.TryReadTimeline(self, out var alignedOn, out _) ? alignedOn.Timeline : null;
+        alignAnimationMisses = 0;
         alignLooksChangedAt = 0;
         var name = pair.Name;
         Logger.Warning($"[BoneAlign] done with {name}: measured {alignAuto}, SimpleHeels {heelsOffset} rot {heelsRotation}, looks {alignLooks}");
@@ -285,7 +417,7 @@ public sealed partial class AnimSync {
 
     private bool HoldAlignPair() {
         if(boneAlignSession is not { } pair) return true;
-        var self = ManualSelf();
+        var self = AlignMover();
         var partner = AlignPartnerObject(pair);
         if(self == null || partner == null || pair.Territory != Client.TerritoryType || pair.Gpose != Client.IsGPosing) return false;
         if(pair.Self is { } own) {
@@ -319,11 +451,28 @@ public sealed partial class AnimSync {
         return BoneAlignPresets.ModelKey(looks, model, skeleton, scale);
     }
 
+    /// <summary>When your animation changes (or stops), the alignment no longer fits: put the
+    /// offsets back to 0 (SimpleHeels, or your GPose character back where it stood).</summary>
+    private void WatchAnimation() {
+        var now = Environment.TickCount64;
+        if(now < alignAnimationCheckAt) return;
+        alignAnimationCheckAt = now + 250;
+        var self = AlignMover();
+        if(self == null) return;
+        ushort? current = AnimationSampling.TryReadTimeline(self, out var sample, out _) ? sample.Timeline : null;
+        if(current == alignAnimation) { alignAnimationMisses = 0; return; }
+        // a stopped animation can read as nothing for a moment while loading: wait for a second reading
+        if(current == null && ++alignAnimationMisses < 3) return;
+        Logger.Warning($"[BoneAlign] animation changed {alignAnimation} -> {current}: offsets reset to 0");
+        TurnOffBoneAlign();
+        boneAlignStatus = "Animation changed - alignment reset. Press Align for the new one.";
+    }
+
     private void WatchAppearance() {
         var now = Environment.TickCount64;
         if(now < alignWatchAt) return;
         alignWatchAt = now + 250;
-        var self = ManualSelf();
+        var self = AlignMover();
         var partner = Objects.FirstOrDefault(o => o.GameObjectId == alignPartnerId);
         if(self == null || partner == null) return;
         var looks = (Looks(self), Looks(partner));
@@ -339,7 +488,7 @@ public sealed partial class AnimSync {
     }
 
     private void StartBoneAlign() {
-        var self = ManualSelf();
+        var self = AlignMover();
         if(self == null || !AnimationSampling.TryReadTimeline(self, out var own, out _)) {
             boneAlignStatus = "Start the animation first, then press Align.";
             return;
@@ -364,7 +513,7 @@ public sealed partial class AnimSync {
     /// <summary>Align to your target (or, for an automatic re-run, the same character again) whatever
     /// animation it's playing: both of you are held still on your current frames while measuring.</summary>
     private void StartTargetAlign(ulong? partnerId) {
-        var self = ManualSelf();
+        var self = AlignMover();
         if(self == null) { boneAlignStatus = "Your character isn't ready."; return; }
         var partner = partnerId is { } id
             ? Objects.FirstOrDefault(o => o.GameObjectId == id)
@@ -426,6 +575,22 @@ public sealed partial class AnimSync {
         return false;
     }
 
+    /// <summary>Characters in GPose you could align to, closest first.</summary>
+    /// <summary>GPose people (players, their GPose copies, NPCs) - not minions, mounts or fashion accessories.</summary>
+    private static bool IsGposeAlignActor(IGameObject o) =>
+        SyncScopeRules.IncludesPlayer(o.ObjectIndex, true) && o is Dalamud.Game.ClientState.Objects.Types.ICharacter &&
+        o.ObjectKind is Dalamud.Game.ClientState.Objects.Enums.ObjectKind.Pc
+            or Dalamud.Game.ClientState.Objects.Enums.ObjectKind.BattleNpc
+            or Dalamud.Game.ClientState.Objects.Enums.ObjectKind.EventNpc;
+
+    private (IGameObject Actor, float Distance)[] GposeAlignCandidates() {
+        var self = AlignMover();
+        if(!Client.IsGPosing || self == null) return Array.Empty<(IGameObject, float)>();
+        return Objects.Where(o => IsGposeAlignActor(o) && o.Address != self.Address)
+            .Select(o => (o, Vector3.Distance(o.Position, self.Position)))
+            .OrderBy(c => c.Item2).Take(12).ToArray();
+    }
+
     private sealed class BoneAlignWindow(AnimSync plugin) : Window("Bone Align###AnimSyncBoneAlign", ImGuiWindowFlags.AlwaysAutoResize) {
         public override void Draw() {
             var font = ImGui.GetFontSize();
@@ -470,6 +635,41 @@ public sealed partial class AnimSync {
             if(plugin.heelsOffset != null) {
                 ImGui.SameLine();
                 if(ImGui.Button("Turn Off", new Vector2(font * 6, 0))) plugin.TurnOffBoneAlign();
+            }
+            if(Client.IsGPosing) {
+                ImGui.Spacing();
+                var mover = plugin.AlignMover();
+                var you = ManualSelf();
+                ImGui.SetNextItemWidth(font * 16);
+                var moverName = mover == null ? "(gone)" : you != null && mover.Address == you.Address ? $"You ({mover.Name.TextValue})" : mover.Name.TextValue;
+                ImGui.BeginDisabled(plugin.BoneAlignBusy);
+                if(ImGui.BeginCombo("Move", moverName)) {
+                    if(you != null && ImGui.Selectable($"You ({you.Name.TextValue}){(plugin.IsMoverAligned(null) ? "  - aligned" : "")}##AlignMoverYou",
+                        plugin.alignMoverId == null)) plugin.SetAlignMover(null);
+                    foreach(var actor in Objects.Where(o => IsGposeAlignActor(o) && (you == null || o.Address != you.Address)))
+                        if(ImGui.Selectable($"{actor.Name.TextValue}{(plugin.IsMoverAligned(actor.GameObjectId) ? "  - aligned" : "")}##AlignMover{actor.GameObjectId}",
+                            plugin.alignMoverId == actor.GameObjectId))
+                            plugin.SetAlignMover(actor.GameObjectId);
+                    ImGui.EndCombo();
+                }
+                ImGui.EndDisabled();
+                if(plugin.parkedMovers.Count > 0 || plugin.heelsOffset != null) {
+                    ImGui.SameLine();
+                    if(ImGui.Button("Turn Off All")) plugin.TurnOffAllMovers();
+                    if(ImGui.IsItemHovered()) ImGui.SetTooltip("Put every moved GPose character back where it stood.");
+                }
+                if(ImGui.IsItemHovered()) ImGui.SetTooltip("Which GPose character gets moved.");
+                ImGui.TextDisabled("Align it to - click one:");
+                var candidates = plugin.GposeAlignCandidates();
+                if(candidates.Length == 0) ImGui.TextDisabled("No other actors in GPose.");
+                ImGui.BeginDisabled(plugin.BoneAlignBusy || !hasLine);
+                foreach(var (actor, distance) in candidates) {
+                    var aligned = plugin.heelsOffset != null && actor.GameObjectId == plugin.alignPartnerId;
+                    var label = FormattableString.Invariant($"{actor.Name.TextValue}  ({distance:0.0} y){(aligned ? "  - aligned" : "")}##AlignPick{actor.GameObjectId}");
+                    if(ImGui.Selectable(label, aligned, ImGuiSelectableFlags.None, new Vector2(font * 20, 0)))
+                        plugin.boneAlignPickRequested = actor.GameObjectId;
+                }
+                ImGui.EndDisabled();
             }
             if(!plugin.BoneAlignBusy) {
                 ImGui.Spacing();
