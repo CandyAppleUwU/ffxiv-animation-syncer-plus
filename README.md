@@ -39,7 +39,8 @@ blocked during combat, duties, cutscenes, GPose, and loading.
 | `/animsync groups` | Sync qualifying nearby groups |
 | `/animsync near` | Sync yourself and players inside your selected radius |
 | `/animsync target` | Sync yourself and the selected player |
-| `/animsync pos` or `/animsync align` | Match nearby position and facing |
+| `/animsync pos` | Match nearby position and facing |
+| `/animsync align` or `/animsync bonealign` | Toggle the Bone Align window |
 | `/animsync toggle` | Toggle automatic synchronization |
 | `/animsync ui` or `/animsync settings` | Toggle the menu |
 

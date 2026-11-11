@@ -82,7 +82,7 @@ public sealed partial class AnimSync : IDalamudPlugin {
 		Framework.Update += Tick;
 		Chat.ChatMessage += OnTimeSyncChat;
 		Commands.AddHandler("/animsync", new CommandInfo(OnCommand) {
-			HelpMessage = "'ui'/'settings': menu; 'timeline': animation player; 'bonealign': bone alignment test; 'groups': sync groups; 'everyone': sync everyone; 'near': sync near you; 'target': sync you and target; 'pos'/'align': match position/facing within 0.5y; 'toggle': auto sync; 'body': body reset.",
+			HelpMessage = "'ui'/'settings': menu; 'timeline': animation player; 'align'/'bonealign': bone alignment; 'groups': sync groups; 'everyone': sync everyone; 'near': sync near you; 'target': sync you and target; 'pos': match position/facing within 0.5y; 'toggle': auto sync; 'body': body reset.",
 		});
 	}
 	public void Dispose() {
@@ -166,7 +166,7 @@ public sealed partial class AnimSync : IDalamudPlugin {
 			case "body": bodyRequested = true; break;
 			case "nearby": case "groups": nearbyRequested = true; break;
 			case "near": nearYouRequested = true; break;
-			case "pos": case "align": positionRequested = true; break;
+			case "pos": positionRequested = true; break;
 			case "target":
 				if((Client.IsGPosing ? Targets.GPoseTarget : Targets.Target) is { } target && IsManualPlayer(target))
 					targetSyncRequest = (target.GameObjectId, target.Address);
@@ -174,7 +174,7 @@ public sealed partial class AnimSync : IDalamudPlugin {
 				break;
 			case "ui": case "settings": settingsWindow.IsOpen = !settingsWindow.IsOpen; break;
 			case "timeline": timelineWindow.IsOpen = !timelineWindow.IsOpen; break;
-			case "bonealign": boneAlignWindow.IsOpen = !boneAlignWindow.IsOpen; break;
+			case "align": case "bonealign": boneAlignWindow.IsOpen = !boneAlignWindow.IsOpen; break;
 			case "toggle": config.Enabled = !config.Enabled; Save(); break;
 			default: Chat.Print("Usage: /animsync [ui|settings|timeline|bonealign|groups|everyone|near|target|pos|align|toggle|body]"); break;
 		}
