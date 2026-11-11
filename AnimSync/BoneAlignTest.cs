@@ -100,6 +100,7 @@ public sealed partial class AnimSync {
     private float alignRotationGain;                             // facing change per degree of command (+1 or -1 expected)
     private float? alignOffsetYaw;                               // which way SimpleHeels' Forward really points
     private (Vector3 Command, Vector3 Bone)? alignMoveSample;    // offset sent and where the bone was before it
+    private (Vector3 Auto, float Rotation, float Error)? alignBest; // closest result so far (used if it can't settle)
     private Vector3 alignTweak;             // the user's manual fine-tuning on top of it
     private float alignTweakRotation;
     private bool alignAutomatic;
@@ -129,6 +130,10 @@ public sealed partial class AnimSync {
     // In GPose, SimpleHeels' /heels temp only changes your real (hidden) character, so the
     // GPose copy is moved directly instead: where it stood when aligning started + the offset.
     private (nint Address, Vector3 Position, float Rotation)? gposeBase;
+
+    /// <summary>No offset at all: "/heels temp reset" (or, in GPose, back where the character stood).</summary>
+    private bool ClearAlignOffset() =>
+        Client.IsGPosing ? MoveGposeActor(Vector3.Zero, 0) : Commands.ProcessCommand(BoneAlignPresets.SimpleHeelsResetCommand);
 
     private bool SendHeelsCommand(Vector3 offset, float degrees) =>
         Client.IsGPosing ? MoveGposeActor(offset, degrees) : Commands.ProcessCommand(BoneAlignPresets.SimpleHeelsSetCommand(offset, degrees));
@@ -244,7 +249,7 @@ public sealed partial class AnimSync {
         }
         ReleaseAlignPlayer();
         // Measure from a clean SimpleHeels offset so nothing old is mixed into the result.
-        if(!SendHeelsCommand(Vector3.Zero, 0)) {
+        if(!ClearAlignOffset()) {
             boneAlignStatus = Client.IsGPosing ? "Your GPose character isn't ready." : "SimpleHeels is needed for Bone Align. Is it installed and enabled?";
             return;
         }
@@ -260,6 +265,7 @@ public sealed partial class AnimSync {
         alignRotationGain = 1;
         alignOffsetYaw = null;
         alignMoveSample = null;
+        alignBest = null;
         Logger.Warning($"[BoneAlign] start ({(automatic ? "auto" : "manual")}): SimpleHeels zeroed, keeping tweak {alignTweak} rot {alignTweakRotation}");
         boneAlignStatus = automatic ? "Appearance changed - aligning again..." : "Aligning...";
     }
@@ -270,6 +276,7 @@ public sealed partial class AnimSync {
         boneAlignStatus = message;
         // Put back what was there before, so a failed re-run doesn't leave the player out of place.
         if(heelsOffset is { } previous) SendHeelsCommand(previous, heelsRotation);
+        else ClearAlignOffset();
     }
 
     private void ProcessBoneAlign() {
@@ -364,7 +371,17 @@ public sealed partial class AnimSync {
         alignLastRotationError = null;
         alignSettleTries = 0;
         alignPasses++;
-        if(alignPasses > 10) { FailAlignJob("Couldn't line the characters up. Press Align to try again."); return; }
+        if(alignPasses > 10) {
+            // They kept moving (e.g. someone who can't be held still): use the closest result found.
+            if(alignBest is { } best && best.Error < 0.05f) {
+                alignAuto = best.Auto;
+                alignAutoRotation = best.Rotation;
+                FinishAlign(self, partner, pair, FormattableString.Invariant($" (within {best.Error * 1000:0} mm - they kept moving)"));
+            } else {
+                FailAlignJob("Couldn't line the characters up - one of them keeps moving. Press Align to try again.");
+            }
+            return;
+        }
         // Learn how much (and which way) a rotation command really turns us.
         if(alignRotationSample is { } turn && MathF.Abs(alignAutoRotation - turn.Command) > 0.05f) {
             var gain = (turn.Error - rotationError) / (alignAutoRotation - turn.Command);
@@ -394,6 +411,7 @@ public sealed partial class AnimSync {
         var offsetYaw = alignOffsetYaw ?? (Client.IsGPosing && gposeBase is { } start ? start.Rotation : self.Rotation);
         var delta = PositionRules.LocalOffset(from, target, offsetYaw);
         Logger.Warning($"[BoneAlign] pass {alignPasses}: delta {delta} (|{delta.Length():0.0000}|), total {alignAuto + delta}, facing off by {rotationError:0.00} deg");
+        if(alignBest is not { } bestSoFar || delta.Length() < bestSoFar.Error) alignBest = (alignAuto, alignAutoRotation, delta.Length());
         if(delta.Length() > BoneAlignTolerance) {
             alignMoveSample = (delta, from);
             alignAuto += delta;
@@ -401,6 +419,10 @@ public sealed partial class AnimSync {
             alignWait = BoneAlignSettleFrames;
             return;
         }
+        FinishAlign(self, partner, pair, "");
+    }
+
+    private void FinishAlign(IGameObject self, IGameObject partner, BoneAlignSession pair, string note) {
         heelsOffset = alignAuto + alignTweak;
         heelsRotation = BoneAlignPresets.WrapDegrees(alignAutoRotation + alignTweakRotation);
         SendHeels(0);
@@ -410,9 +432,9 @@ public sealed partial class AnimSync {
         alignAnimationMisses = 0;
         alignLooksChangedAt = 0;
         var name = pair.Name;
-        Logger.Warning($"[BoneAlign] done with {name}: measured {alignAuto}, SimpleHeels {heelsOffset} rot {heelsRotation}, looks {alignLooks}");
+        Logger.Warning($"[BoneAlign] done with {name}{note}: measured {alignAuto}, SimpleHeels {heelsOffset} rot {heelsRotation}, looks {alignLooks}");
         StopAlignJob();
-        boneAlignStatus = $"Aligned with {name}.";
+        boneAlignStatus = $"Aligned with {name}{note}.";
     }
 
     private bool HoldAlignPair() {
