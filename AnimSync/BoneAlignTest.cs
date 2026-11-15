@@ -20,6 +20,8 @@ public sealed partial class AnimSync {
     private const int BoneAlignSettleFrames = 3;
     private const float BoneAlignTolerance = 0.001f;
     private BoneAlignWindow boneAlignWindow = null!;
+    private AlignOffsetWindow alignOffsetWindow = null!;
+    private static readonly bool ShowCustomAlign = false;
     // Self/Partner playbacks hold each character still while measuring; null = that character has no
     // animation we can hold, so it's measured as it stands.
     private sealed record BoneAlignSession(TimelinePlayback? Self, TimelinePlayback? Partner, ulong PartnerId, nint PartnerAddress,
@@ -42,11 +44,12 @@ public sealed partial class AnimSync {
     private sealed record MoverState(Vector3? HeelsOffset, float HeelsRotation, Vector3 Auto, float AutoRotation,
         Vector3 Tweak, float TweakRotation, ulong PartnerId, (long Self, long Partner) Looks, ushort? Animation,
         bool ToTarget, ulong? PickId, (nint Address, Vector3 Position, float Rotation)? GposeBase,
-        (nint Address, Vector3 Position, Quaternion Rotation)? BrioBase, string Status);
+        (nint Address, Vector3 Position, Quaternion Rotation)? BrioBase, string Status, bool Surface, SurfaceProfile? Profile);
     private readonly System.Collections.Generic.Dictionary<ulong, MoverState> parkedMovers = new();
 
     private MoverState CurrentMoverState() => new(heelsOffset, heelsRotation, alignAuto, alignAutoRotation, alignTweak,
-        alignTweakRotation, alignPartnerId, alignLooks, alignAnimation, alignToTarget, alignPickId, gposeBase, brioBase, boneAlignStatus);
+        alignTweakRotation, alignPartnerId, alignLooks, alignAnimation, alignToTarget, alignPickId, gposeBase, brioBase, boneAlignStatus,
+        alignIsSurface, surfaceProfile);
 
     private void LoadMoverState(MoverState? state) {
         heelsOffset = state?.HeelsOffset; heelsRotation = state?.HeelsRotation ?? 0;
@@ -55,6 +58,7 @@ public sealed partial class AnimSync {
         alignPartnerId = state?.PartnerId ?? 0; alignLooks = state?.Looks ?? default; alignAnimation = state?.Animation;
         alignToTarget = state?.ToTarget ?? false; alignPickId = state?.PickId;
         gposeBase = state?.GposeBase; brioBase = state?.BrioBase;
+        alignIsSurface = state?.Surface ?? false; surfaceProfile = state?.Profile; surfaceAutoTried = state?.Animation;
         heelsPending = false; alignLooksChangedAt = 0; alignAnimationMisses = 0;
         boneAlignStatus = state?.Status ?? "Now pick who to align to.";
     }
@@ -125,7 +129,7 @@ public sealed partial class AnimSync {
     private bool BoneAlignOwns(ulong id, nint address) => boneAlignSession is { } pair &&
         (pair.Self is { } own && own.Id == id && own.Address == address || pair.Partner is { } other && other.Id == id && other.Address == address);
 
-    private bool BoneAlignBusy => alignStage != AlignStage.None;
+    private bool BoneAlignBusy => alignStage != AlignStage.None || SurfaceBusy;
 
     // In GPose, SimpleHeels' /heels temp only changes your real (hidden) character, so the
     // GPose copy is moved directly instead: where it stood when aligning started + the offset.
@@ -183,7 +187,7 @@ public sealed partial class AnimSync {
         heelsPending = false;
         heelsSentAt = now;
         if(!SendHeelsCommand(offset, heelsRotation))
-            boneAlignStatus = Client.IsGPosing ? "Your GPose character isn't ready." : "SimpleHeels is needed for Bone Align. Is it installed and enabled?";
+            boneAlignStatus = Client.IsGPosing ? "Your GPose character isn't ready." : "SimpleHeels is needed for Auto Align. Is it installed and enabled?";
     }
 
     /// <summary>The user's fine-tuning, added on top of the measured alignment.</summary>
@@ -199,6 +203,7 @@ public sealed partial class AnimSync {
         StopAlignJob();
         heelsOffset = null;
         heelsPending = false;
+        alignIsSurface = false;
         alignTweak = Vector3.Zero;
         alignTweakRotation = 0;
         if(Client.IsGPosing) {
@@ -224,6 +229,8 @@ public sealed partial class AnimSync {
 
     private void StopAlignJob() {
         alignStage = AlignStage.None;
+        surfaceStage = SurfaceStage.None;
+        ReleaseSurfaceHold();
         ReleaseBoneAlign();
     }
 
@@ -243,6 +250,7 @@ public sealed partial class AnimSync {
             alignTweakRotation = 0;
         }
         alignAutomatic = automatic;
+        alignIsSurface = false;
         if(!automatic) {
             alignToTarget = toTarget;
             alignPickId = pick;
@@ -250,7 +258,7 @@ public sealed partial class AnimSync {
         ReleaseAlignPlayer();
         // Measure from a clean SimpleHeels offset so nothing old is mixed into the result.
         if(!ClearAlignOffset()) {
-            boneAlignStatus = Client.IsGPosing ? "Your GPose character isn't ready." : "SimpleHeels is needed for Bone Align. Is it installed and enabled?";
+            boneAlignStatus = Client.IsGPosing ? "Your GPose character isn't ready." : "SimpleHeels is needed for Auto Align. Is it installed and enabled?";
             return;
         }
         alignStage = AlignStage.Zeroing;
@@ -292,7 +300,8 @@ public sealed partial class AnimSync {
         if(timelineWindow.IsOpen || !Client.IsLoggedIn || Conditions[ConditionFlag.BetweenAreas] ||
             Conditions[ConditionFlag.BetweenAreas51] || restartRequested || bodyRequested || nearYouRequested || nearbyRequested || targetSyncRequest.HasValue) {
             ReleaseAlignPlayer();
-            if(BoneAlignBusy || boneAlignSession != null) FailAlignJob(timelineWindow.IsOpen
+            if(SurfaceBusy) FailSurfaceJob("Alignment was interrupted. Try again.");
+            else if(BoneAlignBusy || boneAlignSession != null) FailAlignJob(timelineWindow.IsOpen
                 ? "Close Animation Timeline, then press Align again." : "Alignment was interrupted. Press Align to try again.");
             return;
         }
@@ -304,10 +313,18 @@ public sealed partial class AnimSync {
             boneAlignPickRequested = null;
             if(!BoneAlignBusy) BeginAlignJob(false, true, pickId);
         }
-        if(BoneAlignBusy) RunAlignJob();
+        ProcessSnap();
+        if(surfaceRequested) {
+            surfaceRequested = false;
+            if(!BoneAlignBusy && AlignMover() is { } mover && ProfileFor(mover) is { } wanted) BeginSurfaceJob(false, wanted);
+        }
+        if(SurfaceBusy) RunSurfaceJob();
+        else if(BoneAlignBusy) RunAlignJob();
         else {
             if(heelsOffset != null) WatchAnimation();
-            if(heelsOffset != null && config.BoneAlignAuto) WatchAppearance();
+            if(heelsOffset != null && config.BoneAlignAuto) { if(alignIsSurface) WatchSurfaceAppearance(); else WatchAppearance(); }
+            if(heelsOffset != null && alignIsSurface && !BoneAlignBusy) WatchSurfaceHeels();
+            if(!BoneAlignBusy && (heelsOffset == null || alignIsSurface)) WatchSurfaceAuto();
             if(boneAlignWindow.IsOpen && !BoneAlignBusy) ProcessAlignPlayer();
             else { ReleaseAlignPlayer(); alignPlayerAvailable = false; }
         }
@@ -475,6 +492,10 @@ public sealed partial class AnimSync {
 
     /// <summary>When your animation changes (or stops), the alignment no longer fits: put the
     /// offsets back to 0 (SimpleHeels, or your GPose character back where it stood).</summary>
+    private ushort? alignIgnoredAnimation;
+
+    /// <summary>Your animation changed while aligned: pose emotes re-align, idle/walking cancels,
+    /// "start" animations and anything else are ignored (see BoneAlignPresets.ClassifyAnimation).</summary>
     private void WatchAnimation() {
         var now = Environment.TickCount64;
         if(now < alignAnimationCheckAt) return;
@@ -482,13 +503,67 @@ public sealed partial class AnimSync {
         var self = AlignMover();
         if(self == null) return;
         ushort? current = AnimationSampling.TryReadTimeline(self, out var sample, out _) ? sample.Timeline : null;
-        if(current == alignAnimation) { alignAnimationMisses = 0; return; }
-        // a stopped animation can read as nothing for a moment while loading: wait for a second reading
-        if(current == null && ++alignAnimationMisses < 3) return;
-        Logger.Warning($"[BoneAlign] animation changed {alignAnimation} -> {current}: offsets reset to 0");
-        TurnOffBoneAlign();
-        boneAlignStatus = "Animation changed - alignment reset. Press Align for the new one.";
+        if(current == alignAnimation) { alignAnimationMisses = 0; alignIgnoredAnimation = null; return; }
+        // nothing readable = standing/walking (or loading for a moment): cancel after a few readings
+        if(current == null) {
+            // a redraw (e.g. Glamourer changing gear) hides the animation for a moment: wall alignments wait ~3 s
+            if(++alignAnimationMisses < (alignIsSurface ? 12 : 3)) return;
+            Logger.Warning($"[BoneAlign] animation stopped ({alignAnimation} -> none): alignment cancelled");
+            var wasSurface = alignIsSurface;
+            TurnOffBoneAlign();
+            if(wasSurface) surfaceAutoTried = null;   // if the same animation comes back, align again
+            boneAlignStatus = "You stopped the animation - alignment cancelled.";
+            return;
+        }
+        alignAnimationMisses = 0;
+        if(current == alignIgnoredAnimation) return;
+        var key = ResolveTimelineKey(current.Value);
+        if(!alignIsSurface && config.SurfaceAuto && ProfileFor(self) is { } wall) {
+            // partner-aligned, but the new animation is one made for a wall/floor: switch to that
+            Logger.Warning($"[Surface] animation changed to {key}: {wall.Name} (was partner-aligned)");
+            alignIgnoredAnimation = null;
+            surfaceAutoTried = current;
+            AutoLog($"{key} -> aligning: {wall.Name} (was lined up with a partner)");
+            BeginSurfaceJob(false, wall);
+            return;
+        }
+        if(alignIsSurface) {
+            // another animation with a profile: align to its surface; idle/pose without one: off
+            if(ProfileFor(self) is { } profile) {
+                Logger.Warning($"[Surface] animation changed to {key}: {profile.Name}");
+                alignIgnoredAnimation = null;
+                surfaceAutoTried = current;
+                BeginSurfaceJob(true, profile);
+                return;
+            }
+            // snapped to a table for that one animation: any other animation ends it
+            if(surfaceOneOff || surfaceProfile is { } snapped && SnapRules.IsSnap(snapped.Kind) || BoneAlignPresets.ClassifyAnimation(key) != BoneAlignPresets.AnimationChange.Ignore) {
+                var wasTable = surfaceOneOff || surfaceProfile is { } was && SnapRules.IsSnap(was.Kind);
+                surfaceOneOff = false;
+                TurnOffBoneAlign();
+                surfaceAutoTried = current;
+                boneAlignStatus = wasTable ? "Animation changed - no longer snapped in place." : "Animation changed - wall/floor alignment turned off.";
+            } else alignIgnoredAnimation = current;
+            return;
+        }
+        switch(BoneAlignPresets.ClassifyAnimation(key)) {
+            case BoneAlignPresets.AnimationChange.Realign:
+                Logger.Warning($"[BoneAlign] pose changed to {key}: re-aligning");
+                alignIgnoredAnimation = null;
+                BeginAlignJob(true);
+                break;
+            case BoneAlignPresets.AnimationChange.Cancel:
+                Logger.Warning($"[BoneAlign] {key}: alignment cancelled");
+                alignIgnoredAnimation = null;
+                TurnOffBoneAlign();
+                boneAlignStatus = "Back to idle - alignment cancelled.";
+                break;
+            default:
+                alignIgnoredAnimation = current;   // e.g. a pose's "start": wait for what comes next
+                break;
+        }
     }
+
 
     private void WatchAppearance() {
         var now = Environment.TickCount64;
@@ -613,9 +688,93 @@ public sealed partial class AnimSync {
             .OrderBy(c => c.Item2).Take(12).ToArray();
     }
 
-    private sealed class BoneAlignWindow(AnimSync plugin) : Window("Bone Align###AnimSyncBoneAlign", ImGuiWindowFlags.AlwaysAutoResize) {
+    /// <summary>The offsets for the current alignment (partner or object), added on top of it.
+    /// A pole has its own rotation: round the pole.</summary>
+    private void DrawFineTune(float font, double now, bool options = true) {
+        ImGui.Spacing();
+        ImGui.TextDisabled("Offsets");
+        var tweak = alignTweak;
+        var height = tweak.Y; var forward = tweak.Z; var side = tweak.X; var rotation = alignTweakRotation;
+        var changed = false;
+        var pole = PoleAligned;
+        ImGui.SetNextItemWidth(font * 10f);
+        changed |= ImGui.DragFloat("Height", ref height, 0.0005f, -2f, 2f, "%.4f");
+        ImGui.SetNextItemWidth(font * 10f);
+        changed |= ImGui.DragFloat("Forward / Backward", ref forward, 0.0005f, -2f, 2f, "%.4f");
+        ImGui.SetNextItemWidth(font * 10f);
+        changed |= ImGui.DragFloat("Left / Right", ref side, 0.0005f, -2f, 2f, "%.4f");
+        if(pole) DrawPoleTurn(font);
+        else {
+            ImGui.SetNextItemWidth(font * 10f);
+            changed |= ImGui.DragFloat("Rotation", ref rotation, 0.1f, -180f, 180f, "%.1f deg");
+        }
+        var turnBack = false;
+        if(ImGui.Button("Reset Offsets")) {
+            height = forward = side = rotation = 0;
+            changed = true;
+            if(pole && surfacePoleTurn != 0) { surfacePoleTurn = 0; turnBack = true; }
+        }
+        if(changed) SetAlignTweak(new Vector3(side, height, forward), rotation);
+        if(turnBack) ApplyPoleTurn();
+        if(BoneAlignPresets.ShouldSend(heelsPending, now, heelsSentAt)) SendHeels(now);
+        if(options && !alignIsSurface && ImGui.Checkbox("Re-align when race, gender or height changes", ref config.BoneAlignAuto)) Save();
+    }
+
+    /// <summary>The small window a command brings up: just the offsets for what was aligned, and Turn Off.</summary>
+    private sealed class AlignOffsetWindow(AnimSync plugin) : Window("Align Offsets###AnimSyncAlignOffsets", ImGuiWindowFlags.AlwaysAutoResize) {
+        public bool SawAligned;
+        public override void Draw() {
+            if(plugin.boneAlignWindow.IsOpen) { IsOpen = false; return; }   // the full window has the same sliders
+            var font = ImGui.GetFontSize();
+            ImGui.PushTextWrapPos(ImGui.GetCursorPosX() + font * 16);
+            ImGui.TextWrapped(plugin.boneAlignStatus);
+            ImGui.PopTextWrapPos();
+            if(plugin.BoneAlignBusy || plugin.snapPending) return;
+            if(plugin.heelsOffset == null) {
+                if(SawAligned) IsOpen = false;   // it ended (another animation, Turn Off): nothing left to offset
+                return;
+            }
+            SawAligned = true;
+            plugin.DrawFineTune(font, ImGui.GetTime(), false);
+            ImGui.SameLine();
+            if(ImGui.Button("Turn Off")) { plugin.TurnOffBoneAlign(); IsOpen = false; }
+        }
+    }
+
+    private void ShowOffsetWindow() {
+        if(boneAlignWindow.IsOpen) return;
+        alignOffsetWindow.SawAligned = false;
+        alignOffsetWindow.IsOpen = true;
+    }
+
+    /// <summary>"/animsync ass" and the like: a partner preset by name. Top / bottom sets your role (and saves it);
+    /// without either, the role stays as it was last set.</summary>
+    private void RequestPartner(string name, bool? top) {
+        var preset = BoneAlignPresets.BuiltIn.FirstOrDefault(p => string.Equals(p.Name, name, StringComparison.Ordinal));
+        if(preset == null) return;
+        config.BoneAlignBlenderOffset = preset.Line;
+        if(top is { } role) config.BoneAlignReverse = role;
+        Save();
+        boneAlignRequested = true;
+        ShowOffsetWindow();
+    }
+
+    private sealed class BoneAlignWindow(AnimSync plugin) : Window("Auto Align###AnimSyncBoneAlign", ImGuiWindowFlags.AlwaysAutoResize) {
         public override void Draw() {
             var font = ImGui.GetFontSize();
+            if(!ImGui.BeginTabBar("##AlignTabs")) return;
+            if(ImGui.BeginTabItem("Partner")) {
+                DrawPartner(font);
+                ImGui.EndTabItem();
+            }
+            if(ImGui.BeginTabItem("Objects")) {
+                plugin.DrawObjectsTab(font);
+                ImGui.EndTabItem();
+            }
+            ImGui.EndTabBar();
+        }
+
+        private void DrawPartner(float font) {
             if(ImGui.BeginChild("##BoneAlignPresets", new Vector2(font * 9, font * 14), true)) {
                 foreach(var preset in BoneAlignPresets.BuiltIn) {
                     var selected = string.Equals(plugin.config.BoneAlignBlenderOffset.Trim(), preset.Line, StringComparison.Ordinal);
@@ -641,12 +800,18 @@ public sealed partial class AnimSync {
             ImGui.TextWrapped(plugin.boneAlignStatus);
             ImGui.PopTextWrapPos();
             ImGui.BeginDisabled(plugin.BoneAlignBusy);
-            if(ImGui.Checkbox("Reverse", ref plugin.config.BoneAlignReverse)) {
-                plugin.Save();
-                if(plugin.heelsOffset != null) plugin.boneAlignStatus = "Press Align Again to use the new direction.";
+            ImGui.SetNextItemWidth(font * 6f);
+            if(ImGui.BeginCombo("##AlignRole", plugin.config.BoneAlignReverse ? "Top" : "Bottom")) {
+                foreach(var top in new[] { false, true })
+                    if(ImGui.Selectable(top ? "Top" : "Bottom", plugin.config.BoneAlignReverse == top) && plugin.config.BoneAlignReverse != top) {
+                        plugin.config.BoneAlignReverse = top;
+                        plugin.Save();
+                        if(plugin.heelsOffset != null) plugin.boneAlignStatus = "Press Align Again to use the new role.";
+                    }
+                ImGui.EndCombo();
             }
             ImGui.EndDisabled();
-            if(ImGui.IsItemHovered()) ImGui.SetTooltip("Swap who moves to whom: you bring your partner's part of the preset to theirs.");
+            if(ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled)) ImGui.SetTooltip("Your role. It stays as you set it, for every preset.");
             ImGui.BeginDisabled(plugin.BoneAlignBusy || !hasLine || plugin.timelineWindow.IsOpen);
             if(ImGui.Button(plugin.heelsOffset == null ? "Align" : "Align Again", new Vector2(font * 8, 0))) plugin.boneAlignRequested = true;
             if(ImGui.IsItemHovered()) ImGui.SetTooltip("Align to the closest player playing the same animation.");
@@ -697,29 +862,9 @@ public sealed partial class AnimSync {
                 ImGui.Spacing();
                 plugin.DrawAlignPlayer(font * 20f);
             }
-            if(plugin.heelsOffset != null && !plugin.BoneAlignBusy) {
-                ImGui.Spacing();
-                ImGui.TextDisabled("Fine-tune (added on top of the alignment)");
-                var tweak = plugin.alignTweak;
-                var height = tweak.Y; var forward = tweak.Z; var side = tweak.X; var rotation = plugin.alignTweakRotation;
-                var changed = false;
-                ImGui.SetNextItemWidth(font * 10f);
-                changed |= ImGui.DragFloat("Height", ref height, 0.0005f, -2f, 2f, "%.4f");
-                ImGui.SetNextItemWidth(font * 10f);
-                changed |= ImGui.DragFloat("Forward / Backward", ref forward, 0.0005f, -2f, 2f, "%.4f");
-                ImGui.SetNextItemWidth(font * 10f);
-                changed |= ImGui.DragFloat("Left / Right", ref side, 0.0005f, -2f, 2f, "%.4f");
-                ImGui.SetNextItemWidth(font * 10f);
-                changed |= ImGui.DragFloat("Rotation", ref rotation, 0.1f, -180f, 180f, "%.1f deg");
-                if(ImGui.Button("Reset Fine-tune")) {
-                    height = forward = side = rotation = 0;
-                    changed = true;
-                }
-                if(changed) plugin.SetAlignTweak(new Vector3(side, height, forward), rotation);
-                if(BoneAlignPresets.ShouldSend(plugin.heelsPending, now, plugin.heelsSentAt)) plugin.SendHeels(now);
-                if(ImGui.Checkbox("Re-align when race, gender or height changes", ref plugin.config.BoneAlignAuto)) plugin.Save();
-            }
-            if(ImGui.CollapsingHeader("Custom")) {
+            if(plugin.heelsOffset != null && !plugin.BoneAlignBusy && !plugin.alignIsSurface) plugin.DrawFineTune(font, now);
+            if(ShowCustomAlign && ImGui.CollapsingHeader("Custom")) {   // hidden: pasting a Blender align line
+
                 ImGui.TextDisabled("Paste a line from Blender's Copy Align Offset.");
                 ImGui.SetNextItemWidth(font * 20f);
                 if(ImGui.InputTextWithHint("##BoneAlignBlender", "AnimSyncAlign ...", ref plugin.config.BoneAlignBlenderOffset, 256)) plugin.Save();

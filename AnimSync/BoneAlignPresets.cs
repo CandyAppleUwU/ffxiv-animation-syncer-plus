@@ -31,6 +31,20 @@ internal static class BoneAlignPresets {
 	public static long ModelKey(long looks, long model, long skeleton, long scale) =>
 		looks * 1_000_003 ^ HashCode.Combine(model, skeleton, scale);
 
+	public enum AnimationChange { Ignore, Realign, Cancel }
+
+	/// <summary>What a new animation (ActionTimeline key) means while aligned:
+	/// anything with "start" -> ignore; emote/...pose... (e.g. emote/s_pose02_loop) -> re-align;
+	/// resident/idle, resident/move_a, resident/move_b -> cancel; everything else -> ignore.</summary>
+	public static AnimationChange ClassifyAnimation(string? key) {
+		var k = (key ?? string.Empty).Trim().ToLowerInvariant();
+		if(k.Length == 0 || k.Contains("start")) return AnimationChange.Ignore;
+		if(k is "resident/idle" or "resident/move_a" or "resident/move_b" or "resident_move_a" or "resident_move_b")
+			return AnimationChange.Cancel;
+		if(k.StartsWith("emote/") && k.Contains("pose")) return AnimationChange.Realign;
+		return AnimationChange.Ignore;
+	}
+
 	/// <summary>Degrees folded into -180..180.</summary>
 	public static float WrapDegrees(float degrees) {
 		var wrapped = (degrees + 180f) % 360f;

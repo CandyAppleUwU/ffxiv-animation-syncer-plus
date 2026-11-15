@@ -165,6 +165,15 @@ Check(PositionRules.TryParseBlenderAlign(BoneAlignPresets.BuiltIn.Single(p => p.
 Check(Vector3.Distance(PositionRules.ReverseAlignTarget(new Vector3(1, 2, 3), new Vector3(0, 0.05f, 0.1f), MathF.PI / 2), new Vector3(0.9f, 1.95f, 3)) < 1e-5f &&
     Vector3.Distance(PositionRules.AlignTarget(PositionRules.ReverseAlignTarget(new Vector3(1, 2, 3), new Vector3(0.02f, 0.05f, 0.1f), 0.7f), new Vector3(0.02f, 0.05f, 0.1f),
         Quaternion.CreateFromAxisAngle(Vector3.UnitY, 0.7f)), new Vector3(1, 2, 3)) < 1e-5f, "Reverse align is the exact opposite of normal align");
+Check(BoneAlignPresets.ClassifyAnimation("emote/s_pose02_loop") == BoneAlignPresets.AnimationChange.Realign &&
+    BoneAlignPresets.ClassifyAnimation("emote/pose01_loop") == BoneAlignPresets.AnimationChange.Realign &&
+    BoneAlignPresets.ClassifyAnimation("emote/s_pose02_start") == BoneAlignPresets.AnimationChange.Ignore &&
+    BoneAlignPresets.ClassifyAnimation("emote/pose_start") == BoneAlignPresets.AnimationChange.Ignore &&
+    BoneAlignPresets.ClassifyAnimation("resident/idle") == BoneAlignPresets.AnimationChange.Cancel &&
+    BoneAlignPresets.ClassifyAnimation("resident/move_a") == BoneAlignPresets.AnimationChange.Cancel &&
+    BoneAlignPresets.ClassifyAnimation("resident/move_b") == BoneAlignPresets.AnimationChange.Cancel &&
+    BoneAlignPresets.ClassifyAnimation("emote/dance01") == BoneAlignPresets.AnimationChange.Ignore,
+    "Bone Align re-aligns on pose emotes, cancels on idle/walking and ignores start animations");
 
 Check(TimeSyncRules.Matches("Match anim with me c:", "Match anim with me c:"), "Shared phrases match exactly");
 Check(TimeSyncRules.Matches("  shared phrase ", "shared phrase"), "Outer whitespace is ignored");
@@ -731,3 +740,301 @@ try { _ = new LinkedTimelineClock(0,30,0,true,0); Check(false, "Zero-length link
 catch(ArgumentOutOfRangeException) { Check(true, "Zero-duration timelines cannot create a linked clock"); }
 try { _ = new LinkedTimelineClock(30,double.NaN,0,true,0); Check(false, "Nonfinite link accepted"); }
 catch(ArgumentOutOfRangeException) { Check(true, "Unknown-duration music cannot create a linked clock"); }
+// ---- Surface Align ----
+Check(SurfaceRules.RaceCode(4, 1, 7) == "c0801" && SurfaceRules.RaceCode(1, 1, 2) == "c0401" && SurfaceRules.RaceCode(1, 0, 1) == "c0101" &&
+    SurfaceRules.RaceCode(3, 0, 5) == "c1101" && SurfaceRules.RaceCode(8, 1, 15) == "c1801" && SurfaceRules.RaceCode(0, 0, 0) == null,
+    "Surface profiles find each race's animation folder");
+Check(SurfaceRules.AnimationPath("c0801", "emote/j_pose01_loop") == "chara/human/c0801/animation/a0001/bt_common/emote/j_pose01_loop.pap",
+    "Surface profiles build the emote's animation path");
+const string wallRideFile = @"C:\Penumbra\[Candy] Wall Ride [GSit  1 2]\main\gsit1\wallride_top_204b\anim.pap";
+Check(SurfaceRules.ModFolder(wallRideFile, @"C:\Penumbra") == "[Candy] Wall Ride [GSit  1 2]" &&
+    SurfaceRules.ModFolder("|abc_1|" + wallRideFile.ToLowerInvariant(), "C:/Penumbra/") == "[candy] wall ride [gsit  1 2]" &&
+    SurfaceRules.ModFolder("chara/human/c0801/animation/a0001/bt_common/emote/j_pose01_loop.pap", @"C:\Penumbra") == null &&
+    SurfaceRules.ModFolder(wallRideFile, @"D:\Mods") == null, "The mod playing an animation is read from Penumbra's file path");
+var wallRide = SurfaceRules.Find(SurfaceRules.BuiltIn, "[Candy] Wall Ride [GSit  1 2]", "emote/j_pose01_loop");
+Check(wallRide is { Kind: SurfaceKind.WallBack } && SurfaceRules.Find(SurfaceRules.BuiltIn, "Other Mod", "emote/j_pose01_loop") == null &&
+    SurfaceRules.Find(SurfaceRules.BuiltIn, "[Candy] Wall Ride [GSit  1 2]", "emote/j_pose02_loop") == null,
+    "Wall Ride's groundsit 1 is a built-in back-to-the-wall profile, only with that mod");
+var anyMod = new SurfaceProfile("Any", "", "emote/sit", SurfaceKind.Floor);
+var oneMod = new SurfaceProfile("Mine", "Chair Mod", "emote/sit", SurfaceKind.WallBack);
+Check(SurfaceRules.Find(new[] { anyMod, oneMod }, "My Chair Mod v2", "emote/sit") == oneMod &&
+    SurfaceRules.Find(new[] { anyMod, oneMod }, null, "/emote/sit/") == anyMod, "A profile naming the mod wins over an any-mod profile");
+var wallLine = new[] { new Vector2(-0.3f, 0), new Vector2(0, 0.01f), new Vector2(0.3f, 0) };
+var outward = SurfaceRules.FitWallNormal(wallLine, new Vector2(0, 0.4f), new Vector2(0, -1), out var wallSpread);
+Check(Vector2.Distance(outward, new Vector2(0, 1)) < 0.05f && wallSpread > 0.25f, "The wall the pose was made for faces the side the body is on");
+Check(Vector2.Distance(SurfaceRules.FitWallNormal(new[] { Vector2.Zero, new Vector2(0.02f, 0) }, Vector2.Zero, new Vector2(1, 0), out _), new Vector2(1, 0)) < 1e-4f,
+    "Contacts too close together use the character's facing instead");
+var wallHits = new List<(Vector3, Vector3, float)> {
+    (new Vector3(0, 0, -1), new Vector3(0, 0, 1), 1.0f), (new Vector3(0.2f, 0.5f, -1.02f), new Vector3(0.05f, 0, 1), 1.02f),
+    (new Vector3(0, -0.5f, 0), new Vector3(0, 1, 0), 0.5f), (new Vector3(3, 0, -2), new Vector3(1, 0, 0), 2.2f),
+};
+Check(SurfaceRules.PickWall(wallHits, out var wallAt, out var wallFacing) && Vector2.Distance(wallFacing, new Vector2(0, 1)) < 0.05f &&
+    MathF.Abs(wallAt.Z + 1.01f) < 0.02f, "The nearest wall is found from raycast hits, ignoring the floor and farther walls");
+Check(!SurfaceRules.PickWall(new List<(Vector3, Vector3, float)> { (Vector3.Zero, Vector3.UnitY, 1) }, out _, out _), "Only floors hit means no wall");
+Check(SurfaceRules.FacingNormal(Vector3.Zero, new Vector3(1, 0, 0), new Vector3(0, 1, 0), new Vector3(0, 0, 1), Vector3.Zero) == new Vector3(0, 0, -1),
+    "Hit surfaces face back along the ray");
+Check(MathF.Abs(SurfaceRules.Yaw(new Vector2(1, 0)) - MathF.PI / 2) < 1e-5f, "Ground directions use the game's yaw convention");
+Check(MathF.Abs(SurfaceRules.WallPush(new List<(float, float)> { (0.10f, 0.10f), (-0.05f, 0.03f), (0.6f, 0.03f) }) - 0.08f) < 1e-5f,
+    "The deepest bone in the wall (a hand) decides how far out to move; far bones don't count");
+Check(MathF.Abs(SurfaceRules.WallPush(new List<(float, float)> { (0.20f, 0.10f), (0.15f, 0.03f) }) + 0.10f) < 1e-5f,
+    "Bones floating off the wall move back until the closest one touches");
+Check(SurfaceRules.WallPush(new List<(float, float)>()) == 0, "No wall bones, no push");
+Check(MathF.Abs(SurfaceRules.FloorLift(new[] { -0.04f, 0.02f }, 0) !.Value - 0.04f) < 1e-6f &&
+    MathF.Abs(SurfaceRules.FloorLift(new[] { -0.04f, 0.02f }, 0.1f)!.Value - 0.14f) < 1e-6f &&
+    SurfaceRules.FloorLift(Array.Empty<float>(), 0.1f) == null,
+    "Feet come out of the floor first, then the shoes' heel height goes on top");
+var touchGaps = SurfaceRules.WallTouchBones(0.09f, 0.03f).ToDictionary(t => t.Bone, t => t.Gap);
+Check(touchGaps["j_sebo_c"] == 0.09f && touchGaps["j_kosi"] == 0.09f && touchGaps["j_te_l"] == 0.03f &&
+    MathF.Abs(touchGaps["j_ude_b_r"] - 0.04f) < 1e-6f && MathF.Abs(touchGaps["j_naka_b_l"] - 0.02f) < 1e-6f &&
+    SurfaceRules.WallTouchBones(0.09f, 0f).All(t => t.Gap >= 0), "Back and arm thickness set how far each touch bone stays from the wall");
+var floorHits = new List<Vector3>();
+for(var fx = -2; fx <= 2; fx++) for(var fz = -2; fz <= 2; fz++) floorHits.Add(new Vector3(fx * 0.25f, 1 + 0.1f * fx * 0.25f, fz * 0.25f));
+floorHits.Add(new Vector3(0.1f, 1.6f, 0.1f));   // a bench top
+var floorPlane = FloorPlane.Fit(floorHits, new[] { 1f, 1.01f }, out var floorUsed);
+Check(floorPlane is { } fp && MathF.Abs(fp.A - 0.1f) < 1e-3f && MathF.Abs(fp.B) < 1e-3f && MathF.Abs(fp.HeightAt(0.5f, 0) - 1.05f) < 1e-3f && floorUsed.Count == 25,
+    "The floor is fitted as one sloped surface from many hits, ignoring a bench top");
+Check(FloorPlane.Fit(new List<Vector3> { new(0, 2, 0) }, new[] { 2f }, out _) is { A: 0, B: 0, C: 2 } && FloorPlane.Fit(new List<Vector3>(), Array.Empty<float>(), out _) == null,
+    "Too few floor hits mean a flat floor at that height; none means no floor");
+const string heelsJson = """
+{"WorldCharacterDictionary":{"73":{"Candy Apple":{"Enabled":true,"HeelsConfig":[
+ {"Enabled":true,"ModelId":6012,"Offset":0.14,"Slot":3,"PathMode":false},
+ {"Enabled":false,"ModelId":5100,"Offset":0.2,"Slot":4},
+ {"Enabled":true,"ModelId":5100,"Offset":0.05,"Slot":4},
+ {"Enabled":true,"PathMode":true,"Path":"chara/equipment/e0500/model/c0201e0500_sho.mdl","Offset":0.08,"Slot":"Feet"}]}}}}
+""";
+Check(SurfaceRules.ShoePreset(heelsJson, "Candy Apple", 73, 5100, null) == 0.05f, "Only an enabled preset for the shoes worn counts");
+Check(SurfaceRules.ShoePreset(heelsJson, "Candy Apple", 73, 6012, null) == null, "A leg-gear preset isn't a shoe heel (flat slides stay at 0)");
+Check(SurfaceRules.ShoePreset(heelsJson, "Candy Apple", 73, 1, "|x_1|chara\\equipment\\e0500\\model\\c0201e0500_sho.mdl") == 0.08f, "Path presets match the shoes' model file");
+Check(SurfaceRules.ShoePreset(heelsJson, "Someone Else", 73, 5100, null) == null && SurfaceRules.ShoePreset("not json", "Candy Apple", 73, 5100, null) == null,
+    "Other characters' presets and unreadable settings give no heel");
+Check(SurfaceRules.ModelHeelAttribute("heels_offset=0.035") == 0.035f && SurfaceRules.ModelHeelAttribute("heels_offset_a_bc") == 0.12f &&
+    SurfaceRules.ModelHeelAttribute("atr_foo") == null, "A shoe model's own heels_offset attribute is read");
+// ---- visible-wall raycasting ----
+var boxVerts = new List<Vector3>();
+var boxIdx = new List<int>();
+void Quad(Vector3 a, Vector3 b, Vector3 c, Vector3 d) { var s = boxVerts.Count; boxVerts.AddRange(new[] { a, b, c, d }); boxIdx.AddRange(new[] { s, s + 1, s + 2, s, s + 2, s + 3 }); }
+// a wall slab 10 wide, 4 tall, at z = 2 .. 2.2, plus a floor at y = 0
+Quad(new(-5, 0, 2), new(5, 0, 2), new(5, 4, 2), new(-5, 4, 2));
+Quad(new(-5, 0, 2.2f), new(5, 0, 2.2f), new(5, 4, 2.2f), new(-5, 4, 2.2f));
+for(var gx = -5; gx < 5; gx++) for(var gz = -5; gz < 5; gz++) Quad(new(gx, 0, gz), new(gx + 1, 0, gz), new(gx + 1, 0, gz + 1), new(gx, 0, gz + 1));
+var wallMesh = new MeshBvh(boxVerts.ToArray(), boxIdx.ToArray());
+Check(wallMesh.TriangleCount == 204 && wallMesh.Raycast(new Vector3(0, 1, 0), Vector3.UnitZ, 10, out var wallT, out var wallN) &&
+    MathF.Abs(wallT - 2) < 1e-4f && MathF.Abs(MathF.Abs(Vector3.Normalize(wallN).Z) - 1) < 1e-4f, "A ray hits the nearest face of a model through its triangle tree");
+Check(wallMesh.Raycast(new Vector3(0.3f, 1, 0.4f), -Vector3.UnitY, 5, out var floorT, out _) && MathF.Abs(floorT - 1) < 1e-4f &&
+    !wallMesh.Raycast(new Vector3(0, 1, 0), -Vector3.UnitZ * 1, 4, out _, out _), "Model rays find the floor below and miss where nothing is");
+var placedWall = new MeshInstance(wallMesh, new Vector3(100, 5, 50), Quaternion.CreateFromAxisAngle(Vector3.UnitY, MathF.PI / 2), new Vector3(2, 1, 1), "test");
+Check(placedWall.Raycast(new Vector3(100, 6, 50), Vector3.UnitX, 10, out var placedHit, out var placedNormal, out var placedDistance) &&
+    MathF.Abs(placedDistance - 2) < 1e-3f && Vector3.Distance(placedHit, new Vector3(102, 6, 50)) < 1e-3f && MathF.Abs(Vector3.Normalize(placedNormal).X) > 0.999f &&
+    placedWall.Near(new Vector3(101, 6, 50), 0.5f) && !placedWall.Near(new Vector3(130, 6, 50), 1f), "Placed models are moved, turned and scaled into the world for rays");
+// a window (many hits on z = 1) with a curtain fold and a frame edge closer to the player
+var windowHits = new List<(Vector3, Vector3, float)>();
+for(var i = -8; i <= 8; i++) windowHits.Add((new Vector3(i * 0.1f, 1, 1), new Vector3(0, 0, -1), 1));
+windowHits.Add((new Vector3(0.6f, 1, 0.5f), new Vector3(-1, 0, 0), 0.8f));    // frame edge, perpendicular
+windowHits.Add((new Vector3(-0.5f, 1, 0.6f), new Vector3(0.3f, 0, -1), 0.7f)); // curtain fold
+windowHits.Add((new Vector3(-0.5f, 1, 0.62f), new Vector3(0.2f, 0, -1), 0.7f));
+Check(SurfaceRules.FitWallPlane(windowHits, new Vector2(0, 0), new Vector2(0, -1), out var winAt, out var winOut, out var winSupport) &&
+    Vector2.Distance(winOut, new Vector2(0, -1)) < 0.02f && MathF.Abs(winAt.Z - 1) < 0.01f && winSupport == 17,
+    "The wall most hits agree on wins over a closer curtain fold or window-frame edge, facing where you stand");
+Check(ShapeRules.Kind(0.45f, 0.98f, 0.4f) == "seat" && ShapeRules.Kind(0.55f, 0.9f, 0.5f) == "seat" && ShapeRules.Kind(0.78f, 1, 0.9f) == "table" &&
+    ShapeRules.Kind(1.0f, 1, 0.6f) == "counter" && ShapeRules.Kind(2.2f, 1, 1) == "wall" && ShapeRules.Kind(0.45f, 0.3f, 0.4f) == "edge" &&
+    ShapeRules.Kind(0.15f, 1, 0.5f) == "step" && ShapeRules.Kind(1.4f, 1, 0.3f) == "shelf / high ledge",
+    "Detected tops are named by real height: seats 0.45-0.55, tables ~0.75, counters ~1");
+Check(ShapeRules.Kind(0.25f, 1, 0.4f, ShapeRules.SizeScale(0.5f)) == "seat" && ShapeRules.Kind(0.48f, 1, 0.4f, ShapeRules.SizeScale(0.5f)) == "counter" &&
+    ShapeRules.Kind(0.62f, 1, 0.4f, ShapeRules.SizeScale(1.9f)) == "seat" && ShapeRules.SizeScale(1.0f) == 1 && ShapeRules.SizeScale(float.NaN) == 1 &&
+    ShapeRules.Kind(0.52f, 1, 0.4f, ShapeRules.SizeScale(1.02f)) == "seat" && ShapeRules.Kind(0.78f, 1, 0.9f, ShapeRules.SizeScale(1.02f)) == "table",
+    "Seat and table heights scale with the character's legs (Lalafell lower, Roegadyn higher)");
+var ringFound = new List<(int, Vector3, Vector2, float)> {
+    (0, new(0, 0.45f, 1), new(0, 1), 0.45f), (1, new(0.2f, 0.45f, 1), new(0, 1), 0.46f), (35, new(-0.2f, 0.45f, 1), new(0, 1), 0.45f),
+    (10, new(1, 0.9f, 0), new(1, 0), 0.9f), (11, new(1, 0.9f, -0.2f), new(1, 0), 0.9f), (20, new(0, 2.4f, -1), new(0, -1), 2.4f) };
+var ringGroups = ShapeRules.Group(ringFound, 36);
+Check(ringGroups.Count == 3 && ringGroups.Any(g => g.Count == 3) && ringGroups.Any(g => g.Count == 2), "Neighbouring directions with the same top join into one object, also across the start of the ring");
+var stacked = new List<(int, Vector3, Vector2, float)> { (3, new(0, 0.45f, 1), new(0, 1), 0.45f), (3, new(0, 0.78f, 1.6f), new(0, 1), 0.78f),
+    (4, new(0.2f, 0.45f, 1), new(0, 1), 0.45f), (4, new(0.25f, 0.78f, 1.6f), new(0, 1), 0.78f) };
+Check(ShapeRules.Group(stacked, 36).Count == 2, "A bench and a table behind it in the same directions stay two objects");
+var grid = new float[5 * 5];
+for(var gi = 0; gi < grid.Length; gi++) grid[gi] = float.NaN;
+foreach(var gi in new[] { 0, 1, 5, 6 }) grid[gi] = 0.75f;           // a table top
+foreach(var gi in new[] { 3, 4, 8, 9, 14 }) grid[gi] = 0.45f;       // a bench
+grid[24] = 0.9f;                                                     // a candle
+var gridRegions = ShapeRules.GridRegions(grid, 5, 0.05f, 4);
+Check(gridRegions.Count == 2 && gridRegions.Any(r => r.Count == 4) && gridRegions.Any(r => r.Count == 5),
+    "Tops seen from above join into objects by height; tiny ones are dropped");
+// ---- area map ----
+var area = new AreaGrid(12, 0.15f, 10, 20);
+for(var cellIndex = 0; cellIndex < area.Cells; cellIndex++) {
+    int ax = cellIndex % 12, az = cellIndex / 12;
+    if(ax >= 2 && ax <= 5 && az >= 2 && az <= 3) area.Add(cellIndex, 0.48f, 1);                          // a bench
+    if(ax >= 7 && ax <= 9 && az >= 6 && az <= 9) { area.Add(cellIndex, 0.75f, 1); area.Add(cellIndex, 0.62f, 1); }   // a table top and its apron's underside
+    area.Add(cellIndex, ax == 11 ? 0.03f : 0f, 1);                                                       // the floor, with a rug along one side
+}
+var areaParts = AreaRules.Components(area, 0.06f, 0.3f);
+var areaFloor = AreaRules.FloorIndex(areaParts, area, 0.1f);
+Check(areaParts.Count == 3 && areaFloor >= 0 && areaParts[areaFloor].Count == 144 && areaParts.Any(part => part.Count == 8) && areaParts.Any(part => part.Count == 12),
+    "The area map finds the floor (rug and all), a bench and a table top, and ignores the underside of the table");
+var benchNode = AreaRules.NodeUnder(area, 10 + 3 * 0.15f, 0.5f, 20 + 2 * 0.15f);
+Check(benchNode >= 0 && MathF.Abs(area.Y[benchNode] - 0.48f) < 1e-5f && !areaParts[areaFloor].Contains(benchNode) &&
+    areaParts[areaFloor].Contains(AreaRules.NodeUnder(area, 10, 0.02f, 20)) && AreaRules.NodeUnder(area, 0, 0, 0) == -1,
+    "Standing on the bench is told apart from standing on the floor");
+Check(AreaRules.FloorIndex(areaParts, area, -1f) == -1 && MathF.Abs(AreaRules.MeanY(area, areaParts.First(part => part.Count == 12)) - 0.75f) < 1e-5f && area.LayerCount() == 144 + 8 + 24,
+    "Surfaces above what you stand on can't be the floor");
+var blockLoops = AreaRules.Outlines(new HashSet<int> { 0, 1, 12, 13 }, 12);
+var splitLoops = AreaRules.Outlines(new HashSet<int> { 0, 30 }, 12);
+var ringCells = new HashSet<int>();
+for(var rz = 0; rz < 3; rz++) for(var rx = 0; rx < 3; rx++) if(rx != 1 || rz != 1) ringCells.Add(rz * 12 + rx);
+var ringLoops = AreaRules.Outlines(ringCells, 12);
+Check(blockLoops.Count == 1 && blockLoops[0].Count == 8 && splitLoops.Count == 2 && splitLoops.All(loop => loop.Count == 4) &&
+    ringLoops.Count == 2 && ringLoops[0].Count == 12 && ringLoops[1].Count == 4 && blockLoops[0].All(edge => new[] { 0, 1, 12, 13 }.Contains(edge.Cell)),
+    "Outlines follow the border of a shape in order: one loop per piece, the outer border first, holes after");
+var blockPoints = new List<Vector2>();
+for(var bz = 0; bz < 2; bz++) for(var bx = 0; bx < 4; bx++) blockPoints.Add(new Vector2(bx * 0.15f, bz * 0.15f));
+var blockSize = AreaRules.Extents(blockPoints, 0.15f);
+Check(MathF.Abs(blockSize.Long - 0.6f) < 1e-4f && MathF.Abs(blockSize.Short - 0.3f) < 1e-4f && AreaRules.Extents(new List<Vector2>(), 0.15f) == (0f, 0f),
+    "An object's size is measured along its own direction");
+// stairs: four treads 0.25 apart climbing from the floor, a seat beside them, a small footstool
+var stairs = new AreaGrid(14, 0.15f, 0, 0);
+for(var stairCell = 0; stairCell < stairs.Cells; stairCell++) {
+    int sx = stairCell % 14, sz = stairCell / 14;
+    if(sx >= 4 && sx <= 11 && sz >= 2 && sz <= 9) stairs.Add(stairCell, 0.25f * ((sz - 2) / 2 + 1), 1);   // treads, two points deep
+    else if(sx <= 1 && sz >= 5 && sz <= 8) { stairs.Add(stairCell, 0.48f, 1); stairs.Add(stairCell, 0, 1); }   // a bench
+    else if(sx <= 1 && sz <= 1) { stairs.Add(stairCell, 0.25f, 1); stairs.Add(stairCell, 0, 1); }              // a footstool
+    else stairs.Add(stairCell, 0, 1);
+}
+var stairParts = AreaRules.Components(stairs, 0.06f, 0.3f);
+var stairFloor = AreaRules.FloorIndex(stairParts, stairs, 0.1f);
+var stairGround = AreaRules.Ground(stairs, stairParts, stairFloor, 0.3f, 12);
+Check(stairParts.Count == 7 && stairGround.Count == 5 && stairGround.Contains(stairFloor) &&
+    stairGround.All(index => index == stairFloor || stairParts[index].Count == 16) &&
+    AreaRules.Ground(stairs, stairParts, -1, 0.3f, 12).Count == 0,
+    "Stairs are ground you walk on, tread by tread; a bench and a footstool beside them stay objects");
+Check(AreaRules.Covered(area, areaParts.First(part => part.Count == 12), 0.9f) == 0 && AreaRules.Covered(area, areaParts[areaFloor], 0.9f) > 0.1f &&
+    AreaRules.Covered(area, new[] { 7 * AreaGrid.MaxLayers * 12 + 7 * AreaGrid.MaxLayers + 1 }, 0.9f) == 1 && AreaRules.Covered(area, Array.Empty<int>(), 0.9f) == 0,
+    "A surface tucked under another one (a table's foot under its top) is told apart from an open one");
+// tops and undersides: a slab whose underside is far enough below its top to look like a surface of its own
+var slab = new AreaGrid(6, 0.15f, 0, 0);
+for(var slabCell = 0; slabCell < slab.Cells; slabCell++) {
+    if(slabCell % 6 >= 2) { slab.Add(slabCell, 1.1f, -1); slab.Add(slabCell, 0.76f, 1); }   // faces wound the other way round: top is "-1"
+    slab.Add(slabCell, 0, -1);
+}
+slab.OrientUp();
+var slabParts = AreaRules.Components(slab, 0.06f, 0.3f);
+Check(slabParts.Count == 2 && slabParts.Any(part => part.Count == 24 && MathF.Abs(AreaRules.MeanY(slab, part) - 1.1f) < 1e-5f) &&
+    slabParts.Any(part => part.Count == 36) && AreaRules.NodeUnder(slab, 0.45f, 0.5f, 0) % AreaGrid.MaxLayers == 2,
+    "The underside of a ledge is never taken for a surface, whichever way round the model's faces are");
+var railGap = AreaRules.Close(new HashSet<int> { 2 * 12 + 0, 2 * 12 + 1, 2 * 12 + 4, 2 * 12 + 5 }, 12);
+var railWide = AreaRules.Close(new HashSet<int> { 2 * 12 + 0, 2 * 12 + 1, 2 * 12 + 5, 2 * 12 + 6 }, 12);
+Check(railGap.Count == 6 && railGap.Contains(2 * 12 + 2) && railGap.Contains(2 * 12 + 3) && railWide.Count == 4,
+    "Small gaps in a narrow rail are bridged; wide ones and the outside are left alone");
+var diagonal = new AreaGrid(6, 0.15f, 0, 0);
+for(var step = 0; step < 5; step++) diagonal.Add(step * 6 + step, 1f, 1);
+Check(AreaRules.Components(diagonal, 0.06f, 0.3f).Count == 1, "A rail running corner to corner across the grid is one surface");
+Check(AreaRules.Close(new HashSet<int> { 4 * 12 + 0, 4 * 12 + 1, 4 * 12 + 6, 4 * 12 + 7 }, 12, 2).Count == 8, "A longer reach bridges wider gaps in a rail");
+// ---- the solid 3D picture ----
+static void VoxelQuad(VoxelGrid target, Vector3 a, Vector3 b, Vector3 c, Vector3 d) { target.AddTriangle(a, b, c); target.AddTriangle(a, c, d); }
+static void FloodAll(VoxelGrid target, Vector3 from) { if(target.BeginFlood(from)) while(!target.StepFlood(1000)) { } }
+var room3d = new VoxelGrid(Vector3.Zero, 20, 20, 20, 0.05f);
+VoxelQuad(room3d, new(-1, 0.26f, -1), new(2, 0.26f, -1), new(2, 0.26f, 2), new(-1, 0.26f, 2));                  // a floor right across
+VoxelQuad(room3d, new(0.32f, 0.67f, 0.32f), new(0.68f, 0.67f, 0.32f), new(0.68f, 0.67f, 0.68f), new(0.32f, 0.67f, 0.68f));   // a box on it: top...
+VoxelQuad(room3d, new(0.32f, 0.26f, 0.32f), new(0.68f, 0.26f, 0.32f), new(0.68f, 0.67f, 0.32f), new(0.32f, 0.67f, 0.32f));   // ...and four sides
+VoxelQuad(room3d, new(0.32f, 0.26f, 0.68f), new(0.68f, 0.26f, 0.68f), new(0.68f, 0.67f, 0.68f), new(0.32f, 0.67f, 0.68f));
+VoxelQuad(room3d, new(0.32f, 0.26f, 0.32f), new(0.32f, 0.26f, 0.68f), new(0.32f, 0.67f, 0.68f), new(0.32f, 0.67f, 0.32f));
+VoxelQuad(room3d, new(0.68f, 0.26f, 0.32f), new(0.68f, 0.26f, 0.68f), new(0.68f, 0.67f, 0.68f), new(0.68f, 0.67f, 0.32f));
+FloodAll(room3d, new Vector3(0.1f, 0.6f, 0.1f));
+Check((room3d.At(3, 5, 3) & (VoxelGrid.Level | VoxelGrid.Flat)) == (VoxelGrid.Level | VoxelGrid.Flat) && (room3d.At(6, 9, 10) & VoxelGrid.Side) != 0 &&
+    (room3d.At(10, 13, 10) & VoxelGrid.Level) != 0 && room3d.At(3, 9, 3) == VoxelGrid.Free && room3d.At(40, 0, 0) == 0,
+    "Triangles mark the cubes they pass through, and which way they face");
+Check(room3d.IsFree(10, 14, 10) && room3d.IsFree(3, 6, 3) && !room3d.IsFree(10, 9, 10) && room3d.At(10, 9, 10) == 0 && !room3d.IsFree(3, 3, 3) && !room3d.IsFree(10, 3, 10),
+    "Open space is what you can reach: not the inside of a box, not under the floor");
+var slope3d = new VoxelGrid(Vector3.Zero, 20, 20, 20, 0.05f);
+VoxelQuad(slope3d, new(-1, -0.2f, -1), new(2, 1.3f, -1), new(2, 1.3f, 2), new(-1, -0.2f, 2));
+FloodAll(slope3d, new Vector3(0.1f, 0.9f, 0.5f));
+var slopeLeaks = 0;
+for(var lx = 0; lx < 20; lx++) for(var lz = 0; lz < 20; lz++) if(slope3d.IsFree(lx, 0, lz) || (lx > 4 && slope3d.IsFree(lx, 2, lz))) slopeLeaks++;
+Check(slope3d.IsFree(2, 19, 10) && slope3d.IsFree(10, 16, 10) && slopeLeaks == 0, "A sloping surface has no pinholes for open space to leak through");
+room3d.Reset(new Vector3(5, 0, 0));
+Check(room3d.At(3, 5, 3) == 0 && room3d.At(3, 9, 3) == 0 && room3d.Origin.X == 5, "A grid can be emptied and used again");
+var squareLoop = new List<Vector3>();
+for(var sq = 0; sq < 10; sq++) squareLoop.Add(new Vector3(sq * 0.05f, 1, 0));
+for(var sq = 0; sq < 10; sq++) squareLoop.Add(new Vector3(0.5f, 1, sq * 0.05f));
+for(var sq = 0; sq < 10; sq++) squareLoop.Add(new Vector3(0.5f - sq * 0.05f, 1, 0.5f));
+for(var sq = 0; sq < 10; sq++) squareLoop.Add(new Vector3(0, 1, 0.5f - sq * 0.05f));
+var smoothLoop = AreaRules.Smooth(squareLoop, 2, 0.012f);
+Check(smoothLoop.Count >= 4 && smoothLoop.Count <= 20 && smoothLoop.All(point => point.Y == 1 && point.X > -0.01f && point.X < 0.51f) && AreaRules.Smooth(squareLoop.Take(3).ToList(), 2, 0.01f).Count == 3,
+    "Outlines are rounded off and thinned to the points that matter");
+var roomy = new AreaGrid(2, 0.05f, 0, 0);
+roomy.Add(0, 1f, 1, 0.2f); roomy.Add(1, 1f, 1, 2f);
+Check(!AreaRules.Usable(roomy, 0, 0.3f) && AreaRules.Usable(roomy, AreaGrid.MaxLayers, 0.3f) && AreaRules.Covered(roomy, new[] { 0, AreaGrid.MaxLayers }, 0.9f) == 0.5f,
+    "A surface with too little open space above it isn't one you can use");
+// ---- seats: backrest, armrests, front ----
+var tilted = new List<Vector2>();
+for(var tu = -9; tu <= 9; tu++) for(var tv = -3; tv <= 3; tv++)
+    tilted.Add(new Vector2(5, 7) + new Vector2(MathF.Cos(MathF.PI / 6), MathF.Sin(MathF.PI / 6)) * (tu * 0.1f) + new Vector2(-MathF.Sin(MathF.PI / 6), MathF.Cos(MathF.PI / 6)) * (tv * 0.1f));
+var tiltedBox = AreaBox.Fit(tilted, 0.05f);
+Check(Vector2.Distance(tiltedBox.Centre, new Vector2(5, 7)) < 0.01f && MathF.Abs(tiltedBox.HalfLong - 0.95f) < 0.01f && MathF.Abs(tiltedBox.HalfShort - 0.35f) < 0.01f &&
+    MathF.Abs(MathF.Abs(Vector2.Dot(tiltedBox.Long, new Vector2(MathF.Cos(MathF.PI / 6), MathF.Sin(MathF.PI / 6)))) - 1) < 0.01f &&
+    tiltedBox.SideOf(tiltedBox.Centre + tiltedBox.Long * 0.9f) == 0 && tiltedBox.SideOf(tiltedBox.Centre - tiltedBox.Short * 0.3f) == 3 &&
+    Vector2.Distance(tiltedBox.Outward(1), -tiltedBox.Long) < 1e-5f && tiltedBox.Reach(2) == tiltedBox.HalfShort && tiltedBox.HalfSide(2) == tiltedBox.HalfLong,
+    "A seat turned at an angle still gets a rectangle along its own sides");
+var couch = SeatRules.Read(new[] { 0.2f, 0.22f, 0.4f, 0f }, new[] { 1f, 0.9f, 1f, 0f }, 1.8f, 0.6f, 0, 1);
+var chair = SeatRules.Read(new[] { 0f, 0f, 0f, 0.45f }, new[] { 0f, 0.1f, 0f, 1f }, 0.5f, 0.45f, 0, 1);
+var benchSeat = SeatRules.Read(new[] { 0f, 0f, 0f, 0f }, new[] { 0f, 0f, 0f, 0f }, 1.5f, 0.4f, 1, 1);
+var boxedIn = SeatRules.Read(new[] { 0.3f, 0.3f, 0.5f, 0.3f }, new[] { 1f, 1f, 1f, 1f }, 0.6f, 0.6f, 0, 1);
+Check(couch.Type == "couch" && couch.Back == 2 && couch.Arms.SequenceEqual(new[] { 0, 1 }) && couch.Front == 3 && couch.Depth == 0.6f && couch.Width == 1.8f,
+    "A couch: the tall long side is the backrest, the raised ends are armrests, the open side is the front");
+Check(chair.Type == "chair" && chair.Back == 3 && chair.Arms.Length == 0 && chair.Front == 2 && benchSeat.Type == "bench" && benchSeat.Back == -1 && benchSeat.Front == 1 &&
+    SeatRules.Read(new[] { 0f, 0f, 0f, 0f }, new[] { 0f, 0f, 0f, 0f }, 0.4f, 0.4f, 2, 1).Type == "stool" && boxedIn.Front == -1 && boxedIn.Back == 2,
+    "Chairs, benches and stools are told apart; a seat with no back faces whoever walks up to it");
+// ---- snapping a pose to a table ----
+Check(SnapRules.IsTable("table") && SnapRules.IsTable("counter") && SnapRules.IsTable("ledge / rail (table height)") && !SnapRules.IsTable("seat") && !SnapRules.IsTable("step") &&
+    SnapRules.IsLeanable("seat") && SnapRules.IsLeanable("ledge / rail (seat height)") && !SnapRules.IsLeanable("step") && !SnapRules.IsLeanable("platform"),
+    "Tables and counters are what you bend over; other raised tops are a second choice");
+Check(SnapRules.BendDirection(new Vector3(0, 0.9f, 0), new Vector3(0.02f, 1.3f, 0.01f), new Vector3(0.03f, 1.5f, 0)) == null &&
+    Vector2.Distance(SnapRules.BendDirection(new Vector3(1, 0.9f, 1), new Vector3(1, 1.0f, 1.4f), new Vector3(1, 0.95f, 1.7f))!.Value, new Vector2(0, 1)) < 1e-4f,
+    "A pose bends the way its chest and head lean from the hips; an upright one doesn't bend");
+var tableEdge = new List<Vector3> { new(0, 0.8f, 0), new(0.25f, 0.8f, 0), new(0.5f, 0.8f, 0), new(0.75f, 0.8f, 0), new(1, 0.8f, 0),
+    new(1, 0.8f, 0.5f), new(1, 0.8f, 1), new(0.5f, 0.8f, 1), new(0, 0.8f, 1), new(0, 0.8f, 0.5f) };
+Check(SnapRules.NearestEdge(new[] { tableEdge }, new Vector2(0.4f, -1), new Vector2(0.5f, 0.5f), out var edgeAt, out var edgeIn, out var edgeFar) &&
+    Vector3.Distance(edgeAt, new Vector3(0.4f, 0.8f, 0)) < 1e-4f && Vector2.Distance(edgeIn, new Vector2(0, 1)) < 0.05f && MathF.Abs(edgeFar - 1) < 1e-4f &&
+    !SnapRules.NearestEdge(new List<List<Vector3>>(), Vector2.Zero, Vector2.Zero, out _, out _, out _),
+    "The nearest point on a table's edge is found, with the way in over the table");
+var roundEdge = new List<Vector3>();
+for(var i = 0; i < 60; i++) {
+    var angle = i * MathF.Tau / 60;
+    var r = i % 2 == 0 ? 1.03f : 0.97f;   // jagged, like an outline made of small squares
+    roundEdge.Add(new Vector3(MathF.Sin(angle) * r, 0.8f, MathF.Cos(angle) * r));
+}
+var roundFrom = new Vector2(MathF.Sin(0.7f), MathF.Cos(0.7f)) * 1.5f;
+Check(SnapRules.NearestEdge(new[] { roundEdge }, roundFrom, Vector2.Zero, out _, out var roundIn, out _) &&
+    Vector2.Dot(roundIn, -Vector2.Normalize(roundFrom)) > 0.985f,
+    "At a round table the way in points at its middle, however jagged the outline");
+Check(SnapRules.PickCost(1f, new Vector2(0, 1), new Vector2(0, 1)) < SnapRules.PickCost(0.6f, new Vector2(0, 1), new Vector2(0, -0.6f)) &&
+    SnapRules.PickCost(0.5f, new Vector2(0, 1), new Vector2(0, 0.5f)) < SnapRules.PickCost(1f, new Vector2(0, 1), new Vector2(0, 1)),
+    "What you face is bent over rather than something a little nearer behind you");
+Check(MathF.Abs(SnapRules.TableLift(0.8f, new[] { (0.95f, 0.09f, true, 0.3f), (0.78f, 0.03f, false, -0.1f) }) + 0.06f) < 1e-5f &&
+    MathF.Abs(SnapRules.TableLift(0.8f, new[] { (0.95f, 0.09f, true, 0.3f), (0.78f, 0.03f, false, 0.2f) }) - 0.05f) < 1e-5f &&
+    SnapRules.TableLift(0.8f, Array.Empty<(float, float, bool, float)>()) == 0,
+    "The body is raised or lowered to rest on the table, and a hand over the table is never left inside it");
+Check(MathF.Abs(SnapRules.EdgeSlide(0.8f, 0.2f, 0.09f, -0.3f, new[] { (-0.3f, 0.7f, "hips"), (-0.2f, 0.5f, "thigh"), (0.1f, 0.7f, "knee") }, out var slideWhat, out var slideFront) - 0.11f) < 1e-5f &&
+    slideWhat == "thigh" && MathF.Abs(slideFront + 0.2f) < 1e-5f &&
+    MathF.Abs(SnapRules.EdgeSlide(0.8f, 0.2f, 0.09f, -0.3f, new[] { (-0.3f, 0.7f, "hips"), (0.1f, 0.9f, "knee") }, out var lyingWhat, out _) - (0.3f + SnapRules.LyingHipsPast)) < 1e-5f &&
+    lyingWhat.StartsWith("hips on the edge"),
+    "Legs below the table top meet its edge; a pose lying on the table puts its hips on the edge");
+Check(SnapRules.TableHeightFits(0.75f, 0.6f, 1.5f) && SnapRules.TableHeightFits(0.6f, 0.6f, 1.5f) && SnapRules.TableHeightFits(1.5f, 0.6f, 1.5f) &&
+    !SnapRules.TableHeightFits(0.45f, 0.6f, 1.5f) && !SnapRules.TableHeightFits(1.7f, 0.6f, 1.5f),
+    "Anything from mid-thigh to head height can be bent over; lower or taller can't");
+Check(SnapRules.GripScore(Vector3.Zero, new Vector3(0, 0, 0.08f), new Vector3(0.04f, 0, 0.08f), new Vector3(0, 0.03f, 0.08f), new Vector3(0, -0.03f, 0.08f), out var fistCurl) > 0.9f && fistCurl > 0.99f &&
+    MathF.Abs(SnapRules.GripScore(Vector3.Zero, new Vector3(0, 0, 0.08f), new Vector3(0, 0, 0.12f), new Vector3(0, 0.03f, 0.08f), new Vector3(0, -0.03f, 0.08f), out _) - 0.5f) < 1e-4f &&
+    SnapRules.GripScore(Vector3.Zero, new Vector3(0, 0, 0.08f), new Vector3(0, -0.04f, 0.08f), new Vector3(0.03f, 0, 0.08f), new Vector3(-0.03f, 0, 0.08f), out var cuppedCurl) < 0.1f && cuppedCurl > 0.99f &&
+    SnapRules.GripScore(Vector3.Zero, new Vector3(0, 0, 0.08f), new Vector3(0.04f, 0, 0.08f), new Vector3(0, 0, 0.11f), new Vector3(0, 0, 0.05f), out _) < 0.45f &&
+    Vector3.Distance(SnapRules.GripCentre(Vector3.Zero, new Vector3(0, 0, 0.08f), new Vector3(0.04f, 0, 0.08f)), new Vector3(0.03f, 0, 0.06f)) < 1e-5f,
+    "A hand turned to hold something upright is the best grip (a curled palm-up hand loses to an open one turned right), and what it holds runs in front of the palm");
+Check(Vector3.Distance(SnapRules.TurnAbout(new Vector3(1, 2, 1), new Vector3(1, 0, 0), MathF.PI / 2), new Vector3(2, 2, 0)) < 1e-5f &&
+    MathF.Abs(SnapRules.BestTurn(new[] { 2f, 0f, 1f, 0f }) - MathF.PI / 2) < 1e-5f && SnapRules.BestTurn(new[] { 1f, 1f, 1f, 1f }) == 0 &&
+    MathF.Abs(SnapRules.BestTurn(new[] { 3f, 2f, 2f, 0f }) + MathF.PI / 2) < 1e-5f && SnapRules.BestTurn(Array.Empty<float>()) == 0 &&
+    SnapRules.IsSnap(SurfaceKind.Pole) && SnapRules.IsSnap(SurfaceKind.Table) && SnapRules.IsSnap(SurfaceKind.Low) && !SnapRules.IsSnap(SurfaceKind.WallBack) &&
+    SnapRules.IsTop(SurfaceKind.Low) && SnapRules.IsTop(SurfaceKind.Table) && !SnapRules.IsTop(SurfaceKind.Pole),
+    "Turning round a pole picks the angle with the least in the way, and the smallest turn between equals");
+Check(SnapRules.WallFront(new Vector2(0, 1), new Vector3(0, 0.9f, 0), new Vector3(0, 1.3f, 0.2f), new Vector3(0, 1.5f, 0.3f), Array.Empty<Vector3>()) &&
+    !SnapRules.WallFront(new Vector2(0, 1), new Vector3(0, 0.9f, 0), new Vector3(0, 1.3f, -0.2f), new Vector3(0, 1.5f, -0.3f), new[] { new Vector3(0, 1.3f, 0.5f) }) &&
+    SnapRules.WallFront(new Vector2(0, 1), new Vector3(0, 0.9f, 0), new Vector3(0, 1.3f, 0), new Vector3(0, 1.5f, 0), new[] { new Vector3(0.2f, 1.3f, 0.4f), new Vector3(-0.2f, 1.3f, 0.3f) }) &&
+    !SnapRules.WallFront(new Vector2(0, 1), new Vector3(0, 0.9f, 0), new Vector3(0, 1.3f, 0), new Vector3(0, 1.5f, 0), new[] { new Vector3(0.3f, 1.0f, -0.05f), new Vector3(-0.3f, 1.0f, -0.05f) }),
+    "A pose leaning forwards or reaching out puts its front to the wall; leaning back or upright with the hands by it, its back");

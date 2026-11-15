@@ -74,15 +74,18 @@ public sealed partial class AnimSync : IDalamudPlugin {
 		windows.AddWindow(timelineWindow);
 		boneAlignWindow = new BoneAlignWindow(this);
 		windows.AddWindow(boneAlignWindow);
+		alignOffsetWindow = new AlignOffsetWindow(this);
+		windows.AddWindow(alignOffsetWindow);
 		Interface.UiBuilder.DisableGposeUiHide = true;
 		Interface.UiBuilder.DisableCutsceneUiHide = true;
 		Interface.UiBuilder.Draw += windows.Draw;
+		Interface.UiBuilder.Draw += DrawSurfaceDebug;
 		Interface.UiBuilder.OpenConfigUi += OpenSettings;
 		Interface.UiBuilder.OpenMainUi += OpenSettings;
 		Framework.Update += Tick;
 		Chat.ChatMessage += OnTimeSyncChat;
 		Commands.AddHandler("/animsync", new CommandInfo(OnCommand) {
-			HelpMessage = "'ui'/'settings': menu; 'timeline': animation player; 'align'/'bonealign': bone alignment; 'groups': sync groups; 'everyone': sync everyone; 'near': sync near you; 'target': sync you and target; 'pos': match position/facing within 0.5y; 'toggle': auto sync; 'body': body reset.",
+			HelpMessage = "'ui'/'settings': menu; 'timeline': animation player; 'align'/'bonealign': bone alignment; 'groups': sync groups; 'everyone': sync everyone; 'near': sync near you; 'target': sync you and target; 'pos': match position/facing within 0.5y; 'table': bend over the nearest table with your current animation; 'off': undo an alignment; 'toggle': auto sync; 'body': body reset.",
 		});
 	}
 	public void Dispose() {
@@ -104,6 +107,7 @@ public sealed partial class AnimSync : IDalamudPlugin {
 		while(redrawEvents.TryDequeue(out _)) { }
 		Framework.Update -= Tick;
 		Interface.UiBuilder.Draw -= windows.Draw;
+		Interface.UiBuilder.Draw -= DrawSurfaceDebug;
 		Interface.UiBuilder.OpenConfigUi -= OpenSettings;
 		Interface.UiBuilder.OpenMainUi -= OpenSettings;
 		Commands.RemoveHandler("/animsync");
@@ -175,14 +179,32 @@ public sealed partial class AnimSync : IDalamudPlugin {
 			case "ui": case "settings": settingsWindow.IsOpen = !settingsWindow.IsOpen; break;
 			case "timeline": timelineWindow.IsOpen = !timelineWindow.IsOpen; break;
 			case "align": case "bonealign": boneAlignWindow.IsOpen = !boneAlignWindow.IsOpen; break;
+			case "table": case "bend": RequestSnap(null); ShowOffsetWindow(); break;
+			case "pole": RequestSnap(null, SurfaceKind.Pole); ShowOffsetWindow(); break;
+			case "low": case "lowtable": RequestSnap(null, SurfaceKind.Low); ShowOffsetWindow(); break;
+			case "wall": case "lean": RequestWall(null); ShowOffsetWindow(); break;
+			case "wall back": RequestWall(false); ShowOffsetWindow(); break;
+			case "wall front": RequestWall(true); ShowOffsetWindow(); break;
+			case "ass": RequestPartner("Ass", null); break;
+			case "pussy": RequestPartner("Pussy", null); break;
+			case "blowjob": RequestPartner("Blow Job", null); break;
+			case "bottom ass": RequestPartner("Ass", false); break;
+			case "bottom pussy": RequestPartner("Pussy", false); break;
+			case "bottom blowjob": RequestPartner("Blow Job", false); break;
+			case "top ass": RequestPartner("Ass", true); break;
+			case "top pussy": RequestPartner("Pussy", true); break;
+			case "top blowjob": RequestPartner("Blow Job", true); break;
+			case "off": TurnOffBoneAlign(); snapPending = false; Chat.Print("[AnimSync] Alignment turned off."); break;
 			case "toggle": config.Enabled = !config.Enabled; Save(); break;
-			default: Chat.Print("Usage: /animsync [ui|settings|timeline|bonealign|groups|everyone|near|target|pos|align|toggle|body]"); break;
+			default: Chat.Print("Usage: /animsync [ui|settings|timeline|bonealign|groups|everyone|near|target|pos|align|off|toggle|body], objects: [wall|table|lowtable|pole], partner: [top|bottom] [ass|pussy|blowjob]"); break;
 		}
 	}
 	private unsafe void Tick(IFramework framework) {
 		if(disposed) return;
 		if(audioSettingsSaveAt != 0 && Environment.TickCount64 >= audioSettingsSaveAt) Save();
 		ProcessBoneAlign();
+		RefreshSurfaceDebug();
+		StepSurfaceShapes();
 		ProcessTimeline();
 		ProcessTimelineMusic();
 		if(positionRequested) { positionRequested = false; positionAlignment.Request(); }
@@ -380,10 +402,28 @@ public sealed partial class AnimSync : IDalamudPlugin {
 		public string BoneAlignBlenderOffset = string.Empty;
 		public bool BoneAlignAuto = true;
 		public bool BoneAlignReverse;
+		public bool SurfaceAuto = true;
+		public int ObjectPreset;                     // Objects tab: 0 wall, 1 table, 2 low table/chair, 3 pole
+		public int ObjectWallSide;                   // 0 auto, 1 back, 2 front
+		public bool SurfaceDebug;
+		public bool SurfaceMapPoints;
+		public float SurfaceSizeAdjust = 1f;         // scales the seat/table/counter heights for this character
+		public bool SurfaceAddHeels;                 // add the shoes' SimpleHeels heel height
+		public float SurfaceBodyThickness = 0.09f;   // back/hips: bone to skin (yalms)
+		public float SurfaceHandThickness = 0.03f;   // hands: bone to skin (yalms)
+		public List<SurfaceProfile> SurfaceProfiles = new();
+		public List<string> SurfaceDisabledBuiltIn = new();
 		public void Normalize() {
 			Version = 6;
 			TimeSyncPhrase ??= string.Empty;
 			BoneAlignBlenderOffset ??= string.Empty;
+			SurfaceProfiles ??= new();
+			SurfaceProfiles.RemoveAll(p => p == null || string.IsNullOrWhiteSpace(p.Animation));
+			foreach(var p in SurfaceProfiles) { p.Name ??= string.Empty; p.Mod ??= string.Empty; }
+			SurfaceDisabledBuiltIn ??= new();
+			SurfaceSizeAdjust = float.IsFinite(SurfaceSizeAdjust) ? Math.Clamp(SurfaceSizeAdjust, 0.5f, 2f) : 1f;
+			SurfaceBodyThickness = float.IsFinite(SurfaceBodyThickness) ? Math.Clamp(SurfaceBodyThickness, 0f, 0.4f) : 0.09f;
+			SurfaceHandThickness = float.IsFinite(SurfaceHandThickness) ? Math.Clamp(SurfaceHandThickness, 0f, 0.2f) : 0.03f;
 			DjPlayers ??= new();
 			MusicEqualizerGains = MusicEqualizer.Normalize(MusicEqualizerGains);
 			MusicReverbAmount = MusicVolume.Clamp(MusicReverbAmount);
@@ -430,6 +470,7 @@ public sealed partial class AnimSync : IDalamudPlugin {
 			ImGui.SameLine();
 			var timelineCenter = leftEdge + (rowWidth - timelineWidth) / 2;
 			ImGui.SetCursorPosX(Math.Max(ImGui.GetCursorPosX(), Math.Min(timelineCenter, discordStart - style.ItemSpacing.X - timelineWidth)));
+			var timelineStart = ImGui.GetCursorPosX();
 			ImGui.PushStyleColor(ImGuiCol.Button, new Vector4(.08f, .40f, .34f, 1));
 			ImGui.PushStyleColor(ImGuiCol.ButtonHovered, new Vector4(.08f, .49f, .42f, 1));
 			ImGui.PushStyleColor(ImGuiCol.ButtonActive, new Vector4(.06f, .32f, .27f, 1));
@@ -445,6 +486,16 @@ public sealed partial class AnimSync : IDalamudPlugin {
 			if(ImGui.Button("Discord")) Util.OpenLink("https://discord.com/invite/bKswgraKvh");
 			ImGui.PopStyleColor(4);
 			changed |= ImGui.Checkbox("Sync sound", ref c.SyncSound);
+			// Auto Align: right under Animation Timeline, the same width, in its own colour
+			ImGui.SameLine();
+			ImGui.SetCursorPosX(Math.Max(ImGui.GetCursorPosX(), timelineStart));
+			ImGui.PushStyleColor(ImGuiCol.Button, new Vector4(.78f, .22f, .52f, 1));
+			ImGui.PushStyleColor(ImGuiCol.ButtonHovered, new Vector4(.88f, .30f, .61f, 1));
+			ImGui.PushStyleColor(ImGuiCol.ButtonActive, new Vector4(.64f, .16f, .42f, 1));
+			ImGui.PushStyleColor(ImGuiCol.Text, Vector4.One);
+			if(ImGui.Button("Auto Align", new Vector2(timelineWidth, 0))) plugin.boneAlignWindow.IsOpen = !plugin.boneAlignWindow.IsOpen;
+			ImGui.PopStyleColor(4);
+			if(ImGui.IsItemHovered()) ImGui.SetTooltip("Line your animation up with a partner, or with a wall, table or pole.");
 			var sliderWidth = Math.Max(80, ImGui.GetContentRegionAvail().X - ImGui.CalcTextSize("Check Refresh Time").X
 				- ImGui.CalcTextSize("(?)").X - ImGui.GetStyle().ItemInnerSpacing.X - ImGui.GetStyle().ItemSpacing.X * 2);
 			ImGui.SetNextItemWidth(sliderWidth);
@@ -475,8 +526,6 @@ public sealed partial class AnimSync : IDalamudPlugin {
 			if(ImGui.Button("Sync Position")) plugin.positionRequested = true;
 			ButtonHelp("Sync Position", positionBlock ?? "Matches your position and facing to your target within 0.5 yalms. With no target, uses the closest player within 0.5 yalms.");
 			ImGui.EndDisabled();
-			ImGui.SameLine();
-			if(ImGui.Button("Bone Align")) plugin.boneAlignWindow.IsOpen = !plugin.boneAlignWindow.IsOpen;
 			changed |= ImGui.Checkbox("Perfect Frame Sync", ref c.MatchLeadingPlayer);
 			ImGui.SameLine();
 			ImGui.TextColored(new Vector4(1f, 0.25f, 0.25f, 1f), "(Experimental)");

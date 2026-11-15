@@ -39,5 +39,9 @@
     <Compile Include="../AnimSync/SoundSyncPolicy.cs" Link="SoundSyncPolicy.cs" />
     <Compile Include="../AnimSync/PositionRules.cs" Link="PositionRules.cs" />
     <Compile Include="../AnimSync/BoneAlignPresets.cs" Link="BoneAlignPresets.cs" />
+    <Compile Include="../AnimSync/SurfaceRules.cs" Link="SurfaceRules.cs" />
+    <Compile Include="../AnimSync/MeshRaycast.cs" Link="MeshRaycast.cs" />
+    <Compile Include="../AnimSync/AreaMap.cs" Link="AreaMap.cs" />
+    <Compile Include="../AnimSync/VoxelGrid.cs" Link="VoxelGrid.cs" />
   </ItemGroup>
 </Project>
