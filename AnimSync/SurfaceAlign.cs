@@ -47,8 +47,8 @@ public sealed partial class AnimSync {
 
     /// <summary>The shoes' heel height is always added (walls and poles).</summary>
     private static readonly bool SurfaceHeelsOn = true;
-    /// <summary>The debug view (walls, floor, the area map) is switched off; its code stays.</summary>
-    private static readonly bool SurfaceDebugOn = false;
+    /// <summary>The debug view (walls, floor, the area map): the tick box on the Objects tab.</summary>
+    private bool SurfaceDebugOn => config.SurfaceDebug;
 
     // ---- which animation and which mod ----
     private readonly Dictionary<(nint, ushort), (string? Mod, long At)> surfaceModCache = new();
@@ -90,6 +90,7 @@ public sealed partial class AnimSync {
         // a table has to be found first (that needs the area map): come back here once it is
         if(SnapRules.IsSnap(profile.Kind) && !SnapLockValid(profile.Kind)) { RequestSnap(profile); return; }
         if(!ReferenceEquals(profile, surfaceProfile)) surfaceOneOff = false;
+        alignManual = false;
         if(automatic && alignIsSurface && heelsOffset is { } current) {
             alignTweak = current - alignAuto;
             alignTweakRotation = heelsRotation - alignAutoRotation;
@@ -267,6 +268,7 @@ public sealed partial class AnimSync {
     private void FinishSurface(IGameObject self, SurfaceProfile profile, string note) {
         surfaceAutoRetry = false;
         areaWantedUntil = 0;   // the map of the area has done its job: drop it
+        AutoLimbLock(SnapRules.IsTop(profile.Kind), SnapRules.IsTop(profile.Kind));   // table / low table: feet and hands; wall and pole: feet only
         surfaceHeelApplied = profile.Kind is SurfaceKind.WallBack or SurfaceKind.WallFront or SurfaceKind.Pole && SurfaceHeelsOn ? surfaceHeel : 0;
         surfaceStage = SurfaceStage.None;
         ReleaseSurfaceHold();
@@ -693,7 +695,7 @@ public sealed partial class AnimSync {
     /// for the new one right away - only the height moves, no re-align needed.</summary>
     private void WatchSurfaceHeels() {
         var now = Environment.TickCount64;
-        if(now < surfaceHeelCheckAt || heelsOffset is not { } current || surfaceProfile?.Kind is SurfaceKind.Floor or SurfaceKind.Table or SurfaceKind.Low) return;
+        if(now < surfaceHeelCheckAt || heelsOffset is not { } current || !alignManual && surfaceProfile?.Kind is SurfaceKind.Floor or SurfaceKind.Table or SurfaceKind.Low) return;
         surfaceHeelCheckAt = now + 500;
         var self = AlignMover();
         if(self == null) return;

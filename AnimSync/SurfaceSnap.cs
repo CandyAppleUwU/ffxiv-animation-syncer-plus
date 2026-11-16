@@ -143,6 +143,8 @@ public sealed partial class AnimSync {
                 if(roomy) seen += FormattableString.Invariant($" [{o.Kind} {o.Height:0.00} tall {o.Long:0.00}x{o.Short:0.00}, {distance:0.00} away, cost {cost:0.00}]");
                 if(cost >= bestCost) continue;
                 bestCost = cost;
+                // not on a corner: the middle of a chair-sized side, and never hanging off the end of a longer one
+                point = SnapRules.CentreOnSide(o.Outlines, point, inward, 0.3f);
                 best = (point, inward, o.Centre.Y, o.Seat?.Read.Type ?? o.Kind, self.Position);
             }
             if(best != null) break;

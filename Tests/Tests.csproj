@@ -43,5 +43,6 @@
     <Compile Include="../AnimSync/MeshRaycast.cs" Link="MeshRaycast.cs" />
     <Compile Include="../AnimSync/AreaMap.cs" Link="AreaMap.cs" />
     <Compile Include="../AnimSync/VoxelGrid.cs" Link="VoxelGrid.cs" />
+    <Compile Include="../AnimSync/LimbRules.cs" Link="LimbRules.cs" />
   </ItemGroup>
 </Project>

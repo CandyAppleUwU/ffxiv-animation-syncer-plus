@@ -520,6 +520,26 @@ internal static class SnapRules {
 		return true;
 	}
 
+	/// <summary>Where along that side of the object to settle: a side about as wide as a body (a chair, a stool) -
+	/// its middle; a longer one - where you were, but not hanging off either end. The point is slid along the side;
+	/// the way in stays the same.</summary>
+	public static Vector3 CentreOnSide(IReadOnlyList<IReadOnlyList<Vector3>> outlines, Vector3 point, Vector2 inward, float halfBody) {
+		var along = new Vector2(-inward.Y, inward.X);
+		var here = new Vector2(point.X, point.Z);
+		float low = 0, high = 0;   // how far the side runs each way from the point
+		foreach(var loop in outlines)
+			foreach(var corner in loop) {
+				var offset = new Vector2(corner.X, corner.Z) - here;
+				var depth = Vector2.Dot(offset, inward);
+				if(depth < -0.1f || depth > 0.15f) continue;   // not on this side of the object
+				var run = Vector2.Dot(offset, along);
+				low = MathF.Min(low, run);
+				high = MathF.Max(high, run);
+			}
+		var slide = high - low <= halfBody * 2 + 0.2f ? (low + high) / 2 : Math.Clamp(0, low + halfBody, high - halfBody);
+		return point + new Vector3(along.X, 0, along.Y) * slide;
+	}
+
 	private static float Flat(Vector3 a, Vector3 b) => Vector2.Distance(new Vector2(a.X, a.Z), new Vector2(b.X, b.Z));
 
 	/// <summary>Where you get to going a given distance along an outline, from a point on it, towards corner "next" and on.</summary>

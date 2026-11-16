@@ -201,6 +201,10 @@ public sealed partial class AnimSync {
 
     private void TurnOffBoneAlign() {
         StopAlignJob();
+        alignManual = false;
+        limbSnapTable = false;
+        ResetLimbNudges();
+        if(config.AutoLimbLock) lockFeet = lockHands = false;   // what Auto lock switched on goes off with the alignment
         heelsOffset = null;
         heelsPending = false;
         alignIsSurface = false;
@@ -251,6 +255,8 @@ public sealed partial class AnimSync {
         }
         alignAutomatic = automatic;
         alignIsSurface = false;
+        alignManual = false;
+        limbSnapTable = false;
         if(!automatic) {
             alignToTarget = toTarget;
             alignPickId = pick;
@@ -322,8 +328,8 @@ public sealed partial class AnimSync {
         else if(BoneAlignBusy) RunAlignJob();
         else {
             if(heelsOffset != null) WatchAnimation();
-            if(heelsOffset != null && config.BoneAlignAuto) { if(alignIsSurface) WatchSurfaceAppearance(); else WatchAppearance(); }
-            if(heelsOffset != null && alignIsSurface && !BoneAlignBusy) WatchSurfaceHeels();
+            if(heelsOffset != null && !alignManual && config.BoneAlignAuto) { if(alignIsSurface) WatchSurfaceAppearance(); else WatchAppearance(); }
+            if(heelsOffset != null && (alignIsSurface || alignManual) && !BoneAlignBusy) WatchSurfaceHeels();
             if(!BoneAlignBusy && (heelsOffset == null || alignIsSurface)) WatchSurfaceAuto();
             if(boneAlignWindow.IsOpen && !BoneAlignBusy) ProcessAlignPlayer();
             else { ReleaseAlignPlayer(); alignPlayerAvailable = false; }
@@ -440,6 +446,7 @@ public sealed partial class AnimSync {
     }
 
     private void FinishAlign(IGameObject self, IGameObject partner, BoneAlignSession pair, string note) {
+        AutoLimbLock(false, false);   // partner alignments hold the feet
         heelsOffset = alignAuto + alignTweak;
         heelsRotation = BoneAlignPresets.WrapDegrees(alignAutoRotation + alignTweakRotation);
         SendHeels(0);
@@ -496,6 +503,8 @@ public sealed partial class AnimSync {
 
     /// <summary>Your animation changed while aligned: pose emotes re-align, idle/walking cancels,
     /// "start" animations and anything else are ignored (see BoneAlignPresets.ClassifyAnimation).</summary>
+    private const bool ResetOnAnimationChange = true;   // false: the old behaviour (re-align / switch to the new animation's surface)
+
     private void WatchAnimation() {
         var now = Environment.TickCount64;
         if(now < alignAnimationCheckAt) return;
@@ -517,6 +526,14 @@ public sealed partial class AnimSync {
         }
         alignAnimationMisses = 0;
         if(current == alignIgnoredAnimation) return;
+        // any other animation: every offset and the heels offset go back to nothing
+        if(ResetOnAnimationChange) {
+            Logger.Warning($"[BoneAlign] animation changed ({alignAnimation} -> {current}): offsets reset");
+            TurnOffBoneAlign();
+            surfaceAutoTried = current;   // and it isn't aligned again by itself
+            boneAlignStatus = "The animation changed - offsets reset.";
+            return;
+        }
         var key = ResolveTimelineKey(current.Value);
         if(!alignIsSurface && config.SurfaceAuto && ProfileFor(self) is { } wall) {
             // partner-aligned, but the new animation is one made for a wall/floor: switch to that
@@ -688,36 +705,92 @@ public sealed partial class AnimSync {
             .OrderBy(c => c.Item2).Take(12).ToArray();
     }
 
-    /// <summary>The offsets for the current alignment (partner or object), added on top of it.
-    /// A pole has its own rotation: round the pole.</summary>
+    private bool alignManual;   // the offsets were set by hand on the Offset tab: no alignment behind them, nothing to re-do
+
+    /// <summary>Offsets with nothing aligned (the Offset tab): start from where you stand.</summary>
+    private void StartManualOffset() {
+        StopAlignJob();
+        alignAuto = Vector3.Zero;
+        alignAutoRotation = 0;
+        alignTweak = Vector3.Zero;
+        alignTweakRotation = 0;
+        alignIsSurface = false;
+        surfaceOneOff = false;
+        alignManual = true;
+        AutoLimbLock(false);
+        alignAnimation = AlignMover() is { } mover && AnimationSampling.TryReadTimeline(mover, out var manualOn, out _) ? manualOn.Timeline : null;
+        alignAnimationMisses = 0;
+        // the offset sent to SimpleHeels replaces the shoes' own heel height, so that goes in as the starting point:
+        // 0 on the sliders is then exactly how you stood
+        var heel = AlignMover() is { } self && MoverIsYou(self) ? SimpleHeelsHeight() : 0;
+        surfaceHeel = heel;
+        surfaceHeelApplied = heel;
+        alignAuto = new Vector3(0, heel, 0);
+        heelsOffset = alignAuto;
+        heelsRotation = 0;
+        boneAlignStatus = "Offset by hand.";
+    }
+
+    /// <summary>The offsets, added on top of the current alignment (partner or object) - or, with nothing aligned
+    /// (the Offset tab), on top of where you stand. A pole has its own rotation: round the pole.
+    /// The feet / hand locks sit under them.</summary>
     private void DrawFineTune(float font, double now, bool options = true) {
         ImGui.Spacing();
         ImGui.TextDisabled("Offsets");
-        var tweak = alignTweak;
-        var height = tweak.Y; var forward = tweak.Z; var side = tweak.X; var rotation = alignTweakRotation;
+        var active = heelsOffset != null;
+        var tweak = active ? alignTweak : Vector3.Zero;
+        var height = tweak.Y; var forward = tweak.Z; var side = tweak.X; var rotation = active ? alignTweakRotation : 0;
         var changed = false;
-        var pole = PoleAligned;
+        var pole = active && PoleAligned;
+        DrawAxisLocks(0);
         ImGui.SetNextItemWidth(font * 10f);
         changed |= ImGui.DragFloat("Height", ref height, 0.0005f, -2f, 2f, "%.4f");
+        DrawAxisLocks(1);
         ImGui.SetNextItemWidth(font * 10f);
         changed |= ImGui.DragFloat("Forward / Backward", ref forward, 0.0005f, -2f, 2f, "%.4f");
+        DrawAxisLocks(2);
         ImGui.SetNextItemWidth(font * 10f);
         changed |= ImGui.DragFloat("Left / Right", ref side, 0.0005f, -2f, 2f, "%.4f");
+        DrawAxisLocks(3);
         if(pole) DrawPoleTurn(font);
         else {
             ImGui.SetNextItemWidth(font * 10f);
             changed |= ImGui.DragFloat("Rotation", ref rotation, 0.1f, -180f, 180f, "%.1f deg");
         }
+        DrawLimbControl(font);
+        DrawTwistControl(font);
         var turnBack = false;
+        ImGui.BeginDisabled(!active);
         if(ImGui.Button("Reset Offsets")) {
             height = forward = side = rotation = 0;
             changed = true;
+            ResetLimbNudges();   // the feet / hands and Leg / Arm Rotations go back too
             if(pole && surfacePoleTurn != 0) { surfacePoleTurn = 0; turnBack = true; }
         }
-        if(changed) SetAlignTweak(new Vector3(side, height, forward), rotation);
+        ImGui.EndDisabled();
+        if(changed) {
+            if(!active) StartManualOffset();
+            SetAlignTweak(new Vector3(side, height, forward), rotation);
+        }
         if(turnBack) ApplyPoleTurn();
         if(BoneAlignPresets.ShouldSend(heelsPending, now, heelsSentAt)) SendHeels(now);
-        if(options && !alignIsSurface && ImGui.Checkbox("Re-align when race, gender or height changes", ref config.BoneAlignAuto)) Save();
+        DrawLimbLocks();
+        if(options && active && !alignIsSurface && !alignManual && ImGui.Checkbox("Re-align when race, gender or height changes", ref config.BoneAlignAuto)) Save();
+    }
+
+    /// <summary>The Offset tab: move yourself by hand (on top of whatever is aligned), with the feet / hand locks.</summary>
+    private void DrawOffsetTab(float font) {
+        ImGui.PushTextWrapPos(ImGui.GetCursorPosX() + font * 22);
+        ImGui.TextWrapped(heelsOffset == null ? "Move your character by hand. Nothing is aligned right now." : boneAlignStatus);
+        ImGui.PopTextWrapPos();
+        ImGui.BeginDisabled(BoneAlignBusy);
+        DrawFineTune(font, ImGui.GetTime(), false);
+        ImGui.EndDisabled();
+        if(heelsOffset != null && !BoneAlignBusy) {
+            ImGui.Spacing();
+            if(ImGui.Button("Turn Off", new Vector2(font * 6, 0))) TurnOffBoneAlign();
+            if(ImGui.IsItemHovered()) ImGui.SetTooltip("Puts you back where the game has you: no offsets, no alignment.");
+        }
     }
 
     /// <summary>The small window a command brings up: just the offsets for what was aligned, and Turn Off.</summary>
@@ -769,6 +842,10 @@ public sealed partial class AnimSync {
             }
             if(ImGui.BeginTabItem("Objects")) {
                 plugin.DrawObjectsTab(font);
+                ImGui.EndTabItem();
+            }
+            if(ImGui.BeginTabItem("Offset")) {
+                plugin.DrawOffsetTab(font);
                 ImGui.EndTabItem();
             }
             ImGui.EndTabBar();

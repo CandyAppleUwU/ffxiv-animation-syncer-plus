@@ -63,6 +63,14 @@ public sealed partial class AnimSync {
             if(ImGui.Button("Turn Off", new Vector2(font * 6, 0))) TurnOffBoneAlign();
         }
         if(aligned && !BoneAlignBusy) DrawFineTune(font, ImGui.GetTime());
+        ImGui.Spacing();
+        if(ImGui.Checkbox("Debug view", ref config.SurfaceDebug)) Save();
+        if(ImGui.IsItemHovered()) ImGui.SetTooltip("Draws what the plugin sees around you: walls, the floor, tables, seats and poles.\nIt keeps mapping the area while this is on, so switch it off when you're done.");
+        if(config.SurfaceDebug) {
+            ImGui.SameLine();
+            if(ImGui.Checkbox("Map points", ref config.SurfaceMapPoints)) Save();
+            if(ImGui.IsItemHovered()) ImGui.SetTooltip("Also draws the points the map is made of.");
+        }
         ImGui.EndGroup();
     }
 }

@@ -144,7 +144,10 @@ public sealed partial class AnimSync {
         yield return true;
         var under = AreaRules.NodeUnder(grid, stand.X, stand.Y, stand.Z);
         var underY = under >= 0 ? grid.Y[under] : stand.Y;
-        var floorIndex = AreaRules.FloorIndex(components, grid, underY + 0.1f);
+        // what you stand on, if it's at least 8 square yalms, is the floor - even with a bigger floor below it
+        var standing = -1;
+        for(var i = 0; under >= 0 && i < components.Count && standing < 0; i++) if(components[i].Contains(under)) standing = i;
+        var floorIndex = AreaRules.FloorIndex(components, grid, underY + 0.1f, standing, (int)(8f / (grid.Step * grid.Step)));
         if(floorIndex < 0) {
             areaMap = new AreaMapView(new(), new(), new(), new(), new(), VisualLoadingCount > 0 ? "models still loading..." : "no floor found here",
                 stand, mover, voxels.Cells.Length, grid.LayerCount(), areaScanMs, models, signature);

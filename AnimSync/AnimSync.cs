@@ -92,7 +92,7 @@ public sealed partial class AnimSync : IDalamudPlugin {
 		disposed = true;
 		Framework.Update -= Tick;
 		DisposeDrivenPoseSampling();
-		void CleanupPlayback() { ReleaseBoneAlign(); ReleaseAlignPlayer(); ResetTimeline(); DisposeTimelineMusic(); }
+		void CleanupPlayback() { EndLimbLock(); EndTwist(); ReleaseBoneAlign(); ReleaseAlignPlayer(); ResetTimeline(); DisposeTimelineMusic(); }
 		if(Framework.IsInFrameworkUpdateThread) CleanupPlayback();
 		else if(!Framework.IsFrameworkUnloading) {
 			try { Framework.RunOnFrameworkThread(CleanupPlayback).GetAwaiter().GetResult(); }
@@ -203,6 +203,9 @@ public sealed partial class AnimSync : IDalamudPlugin {
 		if(disposed) return;
 		if(audioSettingsSaveAt != 0 && Environment.TickCount64 >= audioSettingsSaveAt) Save();
 		ProcessBoneAlign();
+		UpdateLimbTwist();
+		UpdateBrioTwist();
+		UpdateLimbLock();
 		RefreshSurfaceDebug();
 		StepSurfaceShapes();
 		ProcessTimeline();
@@ -403,6 +406,7 @@ public sealed partial class AnimSync : IDalamudPlugin {
 		public bool BoneAlignAuto = true;
 		public bool BoneAlignReverse;
 		public bool SurfaceAuto = true;
+		public bool AutoLimbLock = true;             // aligning to an object or offsetting switches the feet / hand locks on
 		public int ObjectPreset;                     // Objects tab: 0 wall, 1 table, 2 low table/chair, 3 pole
 		public int ObjectWallSide;                   // 0 auto, 1 back, 2 front
 		public bool SurfaceDebug;

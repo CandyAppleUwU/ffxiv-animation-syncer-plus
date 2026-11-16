@@ -123,7 +123,10 @@ internal static class AreaRules {
 	}
 
 	/// <summary>The floor: the biggest surface that isn't above what the character stands on (index into components, -1 = none).</summary>
-	public static int FloorIndex(IReadOnlyList<List<int>> components, AreaGrid grid, float maxY) {
+	/// <remarks>What you stand on is the floor when it's big enough to be one (a raised stage, an upper level with
+	/// the real floor somewhere below it) - otherwise it's the biggest surface that isn't above you.</remarks>
+	public static int FloorIndex(IReadOnlyList<List<int>> components, AreaGrid grid, float maxY, int standing = -1, int floorCells = int.MaxValue) {
+		if(standing >= 0 && standing < components.Count && components[standing].Count >= floorCells) return standing;
 		var best = -1;
 		for(var i = 0; i < components.Count; i++) {
 			if(MeanY(grid, components[i]) > maxY) continue;

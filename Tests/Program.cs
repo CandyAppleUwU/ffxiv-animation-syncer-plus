@@ -900,6 +900,10 @@ for(var stairCell = 0; stairCell < stairs.Cells; stairCell++) {
     else stairs.Add(stairCell, 0, 1);
 }
 var stairParts = AreaRules.Components(stairs, 0.06f, 0.3f);
+var areaTable = areaParts.ToList().FindIndex(part => part.Count == 12);
+Check(AreaRules.FloorIndex(areaParts, area, 10f, areaTable, 10) == areaTable && AreaRules.FloorIndex(areaParts, area, 10f, areaTable, 100) == AreaRules.FloorIndex(areaParts, area, 10f) &&
+    AreaRules.FloorIndex(areaParts, area, 10f, -1, 1) == AreaRules.FloorIndex(areaParts, area, 10f),
+    "What you stand on is the floor when it's big enough to be one, whatever lies below; a small top isn't");
 var stairFloor = AreaRules.FloorIndex(stairParts, stairs, 0.1f);
 var stairGround = AreaRules.Ground(stairs, stairParts, stairFloor, 0.3f, 12);
 Check(stairParts.Count == 7 && stairGround.Count == 5 && stairGround.Contains(stairFloor) &&
@@ -1006,6 +1010,12 @@ var roundFrom = new Vector2(MathF.Sin(0.7f), MathF.Cos(0.7f)) * 1.5f;
 Check(SnapRules.NearestEdge(new[] { roundEdge }, roundFrom, Vector2.Zero, out _, out var roundIn, out _) &&
     Vector2.Dot(roundIn, -Vector2.Normalize(roundFrom)) > 0.985f,
     "At a round table the way in points at its middle, however jagged the outline");
+var chairSide = new[] { new[] { new Vector3(0, 0.5f, 0), new Vector3(0.7f, 0.5f, 0), new Vector3(0.7f, 0.5f, 0.7f), new Vector3(0, 0.5f, 0.7f) } };
+var longSide = new[] { new[] { new Vector3(0, 0.5f, 0), new Vector3(3f, 0.5f, 0), new Vector3(3f, 0.5f, 1f), new Vector3(0, 0.5f, 1f) } };
+Check(Vector3.Distance(SnapRules.CentreOnSide(chairSide, new Vector3(0.65f, 0.5f, 0), new Vector2(0, 1), 0.3f), new Vector3(0.35f, 0.5f, 0)) < 1e-5f &&
+    Vector3.Distance(SnapRules.CentreOnSide(longSide, new Vector3(2.95f, 0.5f, 0), new Vector2(0, 1), 0.3f), new Vector3(2.7f, 0.5f, 0)) < 1e-5f &&
+    Vector3.Distance(SnapRules.CentreOnSide(longSide, new Vector3(1.2f, 0.5f, 0), new Vector2(0, 1), 0.3f), new Vector3(1.2f, 0.5f, 0)) < 1e-5f,
+    "You settle on the middle of a chair-sized side, and on a longer one where you were but never hanging off its end");
 Check(SnapRules.PickCost(1f, new Vector2(0, 1), new Vector2(0, 1)) < SnapRules.PickCost(0.6f, new Vector2(0, 1), new Vector2(0, -0.6f)) &&
     SnapRules.PickCost(0.5f, new Vector2(0, 1), new Vector2(0, 0.5f)) < SnapRules.PickCost(1f, new Vector2(0, 1), new Vector2(0, 1)),
     "What you face is bent over rather than something a little nearer behind you");
@@ -1038,3 +1048,112 @@ Check(SnapRules.WallFront(new Vector2(0, 1), new Vector3(0, 0.9f, 0), new Vector
     SnapRules.WallFront(new Vector2(0, 1), new Vector3(0, 0.9f, 0), new Vector3(0, 1.3f, 0), new Vector3(0, 1.5f, 0), new[] { new Vector3(0.2f, 1.3f, 0.4f), new Vector3(-0.2f, 1.3f, 0.3f) }) &&
     !SnapRules.WallFront(new Vector2(0, 1), new Vector3(0, 0.9f, 0), new Vector3(0, 1.3f, 0), new Vector3(0, 1.5f, 0), new[] { new Vector3(0.3f, 1.0f, -0.05f), new Vector3(-0.3f, 1.0f, -0.05f) }),
     "A pose leaning forwards or reaching out puts its front to the wall; leaning back or upright with the hands by it, its back");
+// ---- locking feet / hands in place through LivePose ----
+var limbRoot = new Vector3(10, 5, -3);
+var limbTurn = Quaternion.CreateFromAxisAngle(Vector3.UnitY, 0.7f);
+var limbScale = new Vector3(1.1f);
+var limbFoot = new Vector3(0.12f, 0.08f, 0.05f);
+var limbWorld = LimbRules.WorldPoint(limbFoot, limbRoot, limbTurn, limbScale);
+var limbLower = LimbRules.Offset(limbWorld, limbFoot, limbRoot - new Vector3(0, 0.22f, 0), limbTurn, limbScale);
+var limbTurned = Quaternion.CreateFromAxisAngle(Vector3.UnitY, 1.2f);
+var limbMoved = LimbRules.Offset(limbWorld, limbFoot, limbRoot + new Vector3(0.3f, -0.1f, 0.2f), limbTurned, limbScale);
+Check(LimbRules.Offset(limbWorld, limbFoot, limbRoot, limbTurn, limbScale).Length() < 1e-5f &&
+    Vector3.Distance(limbLower, new Vector3(0, 0.2f, 0)) < 1e-5f &&
+    Vector3.Distance(LimbRules.WorldPoint(limbFoot + limbMoved, limbRoot + new Vector3(0.3f, -0.1f, 0.2f), limbTurned, limbScale), limbWorld) < 1e-4f,
+    "A locked foot's offset is zero until the body moves, then exactly what puts it back where it was (height scale and turning included)");
+var limbMeasured = Quaternion.CreateFromYawPitchRoll(0.3f, 0.5f, -0.2f);
+var limbWanted = LimbRules.DesiredModel(limbTurned, limbTurn * Quaternion.CreateFromYawPitchRoll(0.1f, 0.2f, 0.3f));
+var limbSent = Quaternion.CreateFromAxisAngle(Vector3.UnitX, 0.25f);
+var limbRaw = limbMeasured * Quaternion.Inverse(limbSent);   // the bone without the turn already sent
+Check(LimbRules.Angle(limbRaw * LimbRules.RotationFix(limbSent, limbMeasured, limbWanted), limbWanted) < 0.01f &&
+    LimbRules.Angle(limbTurned * limbWanted, limbTurn * Quaternion.CreateFromYawPitchRoll(0.1f, 0.2f, 0.3f)) < 0.01f &&
+    MathF.Abs(LimbRules.Angle(Quaternion.Identity, Quaternion.CreateFromAxisAngle(Vector3.UnitZ, MathF.PI / 6)) - 30) < 0.01f,
+    "The turn sent for a locked foot brings it back to the way it faced, counting the turn already sent");
+var limbStacks = new[] {
+    new LimbStack("j_asi_d_l", new Vector3(0, 0.2f, 0), Quaternion.Identity, true),
+    new LimbStack("j_te_r", new Vector3(0.01f, 0, 0), Quaternion.Identity, false),
+    new LimbStack("j_asi_d_r", Vector3.Zero, Quaternion.Identity, true),
+};
+var limbJson = System.Text.Json.Nodes.JsonNode.Parse(LimbRules.PoseJson("", 7, 2, limbStacks))!;
+var limbPose = limbJson["BodyPoses"]![0]!["Pose"]!.AsArray();
+var limbKept = System.Text.Json.Nodes.JsonNode.Parse(LimbRules.PoseJson(
+    "{\"BodyPoses\":[{\"TimelineId\":7,\"SecondaryTimelineId\":2,\"Pose\":[{\"BonePoseInfoId\":{\"BoneName\":\"j_asi_d_l\",\"Partial\":0,\"Slot\":0},\"Stacks\":[{\"Propogate\":3}]}]},{\"TimelineId\":9,\"SecondaryTimelineId\":0,\"Pose\":[]}],\"Frozen\":false}",
+    7, 2, limbStacks))!;
+var limbCursed = System.Text.Json.Nodes.JsonNode.Parse(LimbRules.PoseJson("{\"CursedPose\":[]}", 7, 2, limbStacks))!;
+Check((int)limbJson["BodyPoses"]![0]!["TimelineId"]! == 7 && (int)limbJson["BodyPoses"]![0]!["SecondaryTimelineId"]! == 2 && limbPose.Count == 2 &&
+    (string)limbPose[0]!["BonePoseInfoId"]!["BoneName"]! == "j_asi_d_l" && (int)limbPose[0]!["Stacks"]![0]!["IK_Arg0"]! == 3 &&
+    (double)limbPose[0]!["Stacks"]![0]!["Transform"]!["Position"]!["Y"]! == 0.2 && (double)limbPose[0]!["Stacks"]![0]!["IK_RotationAxis"]!["Z"]! == -1 &&
+    (int)limbPose[1]!["Stacks"]![0]!["IK_Arg0"]! == 2 && (bool)limbPose[1]!["Stacks"]![0]!["IK_Enabled"]! &&
+    limbKept["BodyPoses"]!.AsArray().Count == 2 && limbKept["BodyPoses"]![0]!["Pose"]!.AsArray().Count == 2 &&
+    limbKept["BodyPoses"]![0]!["Pose"]![0]!["Stacks"]!.AsArray().Count == 2 && (bool)limbKept["Frozen"]! == false &&
+    limbCursed["CursedPose"]!.AsArray().Count == 2 && limbCursed["BodyPoses"] == null,
+    "Locked limbs are added to LivePose's data for the animation playing, keeping what was there and leaving out limbs that haven't moved");
+var legTop = new Vector3(0.1f, 1f, 0);
+var legKnee = new Vector3(0.1f, 0.52f, 0.06f);
+var legFoot = new Vector3(0.1f, 0.06f, 0);
+var legKneeTurn = Quaternion.CreateFromAxisAngle(Vector3.UnitY, MathF.PI / 2);   // its own -Z is the model's -X: the hinge
+var legFootTurn = Quaternion.CreateFromYawPitchRoll(0.2f, 0.1f, 0);
+var (legOffset, legFix) = LimbRules.Solve(legTop, legKnee, legFoot, legKneeTurn, legFootTurn, -Vector3.UnitZ, new Vector3(0.03f, 0.25f, 0.05f), legFootTurn);
+// bend the leg the way the solver says it bends, and see where the foot ends up
+static (Vector3, Quaternion) BendLeg(Vector3 top, Vector3 knee, Vector3 foot, Vector3 target, Quaternion footTurn) {
+    Quaternion best = Quaternion.Identity; var miss = float.PositiveInfinity;
+    for(var step = -1800; step <= 1800; step++) {
+        var turn = Quaternion.CreateFromAxisAngle(Vector3.UnitX, step * MathF.PI / 3600);
+        var error = MathF.Abs(Vector3.Distance(knee + Vector3.Transform(foot - knee, turn), top) - Vector3.Distance(target, top));
+        if(error < miss) { miss = error; best = turn; }
+    }
+    var bent = knee + Vector3.Transform(foot - knee, best);
+    var swing = LimbRules.FromTo(bent - top, target - top);
+    return (top + Vector3.Transform(bent - top, swing), swing * best * footTurn);
+}
+var (legEnds, legTilted) = BendLeg(legTop, legKnee, legFoot, legFoot + legOffset, legFootTurn);
+var (legHigh, _) = LimbRules.Solve(legTop, legKnee, legFoot, legKneeTurn, legFootTurn, -Vector3.UnitZ, new Vector3(0, -0.6f, 0), legFootTurn);
+var legLength = Vector3.Distance(legTop, legKnee) + Vector3.Distance(legKnee, legFoot);
+Check(Vector3.Distance(legOffset, new Vector3(0.03f, 0.25f, 0.05f)) < 1e-5f && Vector3.Distance(legEnds, legFoot + legOffset) < 2e-3f &&
+    LimbRules.Angle(legTilted, legFootTurn) > 5 && LimbRules.Angle(legTilted * legFix, legFootTurn) < 0.5f &&
+    MathF.Abs(Vector3.Distance(legFoot + legHigh, legTop) - legLength * 0.998f) < 1e-4f && legHigh.Y > -0.6f + 0.05f &&
+    Vector3.Cross(Vector3.Normalize(legFoot + legHigh - legTop), Vector3.Normalize(legFoot + new Vector3(0, -0.6f, 0) - legTop)).Length() < 1e-4f &&
+    LimbRules.Angle(LimbRules.FromTo(Vector3.UnitX, Vector3.UnitZ), Quaternion.CreateFromAxisAngle(Vector3.UnitY, -MathF.PI / 2)) < 0.01f,
+    "A locked leg bends to keep the foot in place and flat; past its reach it goes straight and the foot comes up with the body, unstretched");
+var legThighTurn = Quaternion.CreateFromYawPitchRoll(0.4f, -0.2f, 0.1f);
+var legWant = LimbRules.DesiredModel(Quaternion.Identity, legFootTurn);
+var legReached = LimbRules.SolveTurns(legTop, legKnee, legFoot, legThighTurn, legKneeTurn, legFootTurn, -Vector3.UnitZ, new Vector3(0.03f, 0.25f, 0.05f), legWant,
+    out var turnThigh, out var turnCalf, out var turnFoot);
+// turn the bones the way LivePose does (onto each bone's own rotation, what hangs off it following) and see where the foot ends up
+var swungThigh = (legThighTurn * turnThigh) * Quaternion.Inverse(legThighTurn);
+var kneeAfter = legTop + Vector3.Transform(legKnee - legTop, swungThigh);
+var calfCarried = swungThigh * legKneeTurn;
+var foldedCalf = (calfCarried * turnCalf) * Quaternion.Inverse(calfCarried);
+var footAfter = kneeAfter + Vector3.Transform(Vector3.Transform(legFoot - legKnee, swungThigh), foldedCalf);
+var footFacing = foldedCalf * swungThigh * legFootTurn * turnFoot;
+Check(legReached && Vector3.Distance(footAfter, legFoot + new Vector3(0.03f, 0.25f, 0.05f)) < 2e-3f && LimbRules.Angle(footFacing, legFootTurn) < 0.2f &&
+    !LimbRules.SolveTurns(legTop, legKnee, legFoot, legThighTurn, legKneeTurn, legFootTurn, -Vector3.UnitZ, new Vector3(0, -0.2f, 0), legWant, out _, out _, out var gaveUp) &&
+    gaveUp == Quaternion.Identity,
+    "With turns only, the thigh and calf turn to put a locked foot back and the foot stays flat; out of reach, it gives up and turns nothing");
+var turnJson = System.Text.Json.Nodes.JsonNode.Parse(LimbRules.PoseJson("", 7, 2, new[] { new LimbStack("j_asi_a_l", Vector3.Zero, turnThigh, true, false) }))!;
+Check(turnJson["BodyPoses"]![0]!["Pose"]![0]!["Stacks"]![0]!["IK_Enabled"] == null && (int)turnJson["BodyPoses"]![0]!["Pose"]![0]!["Stacks"]![0]!["Propogate"]! == 3 &&
+    (double)turnJson["BodyPoses"]![0]!["Pose"]![0]!["Stacks"]![0]!["Transform"]!["Position"]!["Y"]! == 0,
+    "A turn-only entry carries no IK and no movement");
+var (legBack, _) = LimbRules.Solve(legTop, legKnee, legFoot, legKneeTurn, legFootTurn, -Vector3.UnitZ, new Vector3(0, 0, -1.5f), legFootTurn, true);
+var (legDeep, _) = LimbRules.Solve(legTop, legKnee, legFoot, legKneeTurn, legFootTurn, -Vector3.UnitZ, new Vector3(0, -0.6f, -0.2f), legFootTurn, true);
+Check(MathF.Abs(legBack.Y) < 1e-5f && MathF.Abs(Vector3.Distance(legFoot + legBack, legTop) - legLength * 0.998f) < 1e-4f && legBack.Z < -0.05f && legBack.Z > -1.5f &&
+    MathF.Abs(Vector3.Distance(legFoot + legDeep, legTop) - legLength * 0.998f) < 1e-4f && legDeep.Y > -0.6f,
+    "A foot put on the floor stays at floor height when its spot is too far: it comes in under the body; only a floor out of reach leaves it hanging");
+var freeRoot = limbRoot + new Vector3(0.3f, -0.1f, 0.2f);
+var freeAll = LimbRules.Wanted(limbWorld, limbFoot, limbRoot, limbTurn, freeRoot, limbTurn, limbScale, true, true, true, true);
+var freeHeight = LimbRules.Wanted(limbWorld, limbFoot, limbRoot, limbTurn, freeRoot, limbTurn, limbScale, false, true, true, true);
+var freeTurn = LimbRules.Wanted(limbWorld, limbFoot, limbRoot, limbTurn, limbRoot, limbTurned, limbScale, true, true, true, false);
+var keptTurn = LimbRules.Wanted(limbWorld, limbFoot, limbRoot, limbTurn, limbRoot, limbTurned, limbScale, true, true, true, true);
+Check(Vector3.Distance(freeAll, LimbRules.Offset(limbWorld, limbFoot, freeRoot, limbTurn, limbScale)) < 1e-6f && freeHeight.Y == 0 && freeHeight.X == freeAll.X && freeHeight.Z == freeAll.Z &&
+    MathF.Abs(freeAll.Y - 0.1f / 1.1f) < 1e-4f && freeTurn.Length() < 1e-4f && keptTurn.Length() > 0.01f &&
+    LimbRules.Angle(LimbRules.Facing(limbTurn, limbTurn, limbTurned, false), limbTurned) < 0.01f && LimbRules.Angle(LimbRules.Facing(limbTurn, limbTurn, limbTurned, true), limbTurn) < 0.01f,
+    "A lock can be let go on one slider: unlocked on height the limb rises and falls with the body, unlocked on rotation it turns with it");
+
+var brioText = System.Text.Json.Nodes.JsonNode.Parse("\"0.1, 0.2, 0.3, 0.9\"");
+var brioFields = System.Text.Json.Nodes.JsonNode.Parse("{\"X\":0.1,\"Y\":0.2,\"Z\":0.3,\"W\":0.9}");
+var brioTurn = Quaternion.Normalize(new Quaternion(0.3f, -0.2f, 0.5f, 0.7f));
+Check(LimbRules.TryReadQuaternion(brioText, out var brioA) && LimbRules.TryReadQuaternion(brioFields, out var brioB) && LimbRules.Angle(brioA, brioB) < 0.01f &&
+    LimbRules.TryReadQuaternion(LimbRules.WriteQuaternion(brioTurn, brioText), out var brioC) && LimbRules.Angle(brioC, brioTurn) < 0.01f &&
+    LimbRules.TryReadQuaternion(LimbRules.WriteQuaternion(brioTurn, brioFields), out var brioD) && LimbRules.Angle(brioD, brioTurn) < 0.01f &&
+    LimbRules.WriteQuaternion(brioTurn, brioFields) is System.Text.Json.Nodes.JsonObject && !LimbRules.TryReadQuaternion(System.Text.Json.Nodes.JsonNode.Parse("\"nonsense\""), out _),
+    "Brio pose rotations are read and written back in the shape they came in (text, fields); garbage is refused");
